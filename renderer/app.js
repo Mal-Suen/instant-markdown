@@ -121,7 +121,6 @@ function vditorOptions(tab, content) {
       math: { engine: 'KaTeX' },
       markdown: { autoSpace: true, toc: true, footnotes: true },
     },
-    input: (value) => onEditorInput(tab, value),
     after: () => {
       tab._initializing = false
       tab.ready = true
@@ -139,9 +138,18 @@ function vditorOptions(tab, content) {
         } catch {}
       }
       const irEl = tab.host ? tab.host.querySelector('.vditor-ir') : null
-      if (irEl && !tab._fwAttached) {
-        tab._fwAttached = true
+      if (irEl && !tab._inputAttached) {
+        tab._inputAttached = true
         irEl.addEventListener('input', (e) => {
+          if (tab._initializing) return
+          if (!tab.dirty) {
+            tab.dirty = true
+            renderTabbar()
+          }
+          clearTimeout(tab._statusTimer)
+          tab._statusTimer = setTimeout(() => updateStatus(), 400)
+          clearTimeout(tab._outlineTimer)
+          tab._outlineTimer = setTimeout(renderOutlinePanel, 500)
           if (e.isComposing) return
           try {
             normalizeFullwidthInBlock()
@@ -168,17 +176,6 @@ function createEditorForTab(tab) {
   tab._initDark = state.settings.dark
   tab.host = host
   tab.vditor = new Vditor(host, vditorOptions(tab, content))
-}
-
-function onEditorInput(tab, value) {
-  if (tab._initializing) return
-  if (!tab.dirty) {
-    tab.dirty = true
-    renderTabbar()
-  }
-  updateStatus(value)
-  clearTimeout(tab._outlineTimer)
-  tab._outlineTimer = setTimeout(renderOutlinePanel, 500)
 }
 
 // ---------- 标签页 ----------
@@ -248,7 +245,7 @@ async function closeTab(id) {
     const choice = await confirmUnsaved('「' + tab.name + '」有未保存的修改。')
     if (choice === 'cancel') return
     if (choice === 'save') {
-      await saveTab(tab, false)
+      await saveTab(tab)
       if (tab.dirty) return
     }
   }
@@ -329,11 +326,10 @@ function suggestName(tab) {
   return /\.md$/i.test(tab.name) ? tab.name : tab.name + '.md'
 }
 
-async function saveTab(tab, silent) {
+async function saveTab(tab) {
   if (!tab.vditor || !tab.dirty || !tab.ready) return
   const content = tabValue(tab)
   if (!tab.path) {
-    if (silent) return
     const p = await api.saveFileDialog(suggestName(tab), content)
     if (!p) return
     tab.path = p
@@ -343,7 +339,7 @@ async function saveTab(tab, silent) {
   } else {
     const r = await api.writeFile(tab.path, content)
     if (!r.ok) {
-      if (!silent) toast('保存失败：' + r.error)
+      toast('保存失败：' + r.error)
       return
     }
   }
@@ -552,17 +548,32 @@ function closeFind() {
   $('#findbar').hidden = true
 }
 
+function selectionInEditor() {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount || !sel.anchorNode) return false
+  let node = sel.anchorNode
+  if (node.nodeType === 3) node = node.parentNode
+  return !!(node.closest && node.closest('.vditor-ir'))
+}
+
 function doFind(backwards) {
   const q = $('#find-input').value
   if (!q) return
   try {
-    window.find(q, false, backwards, true)
+    for (let i = 0; i < 50; i++) {
+      if (!window.find(q, false, backwards, true)) return
+      if (selectionInEditor()) return
+    }
   } catch {}
 }
 
 function rawFind(q) {
   try {
-    return window.find(q, false, false, true)
+    for (let i = 0; i < 50; i++) {
+      if (!window.find(q, false, false, true)) return false
+      if (selectionInEditor()) return true
+    }
+    return false
   } catch {
     return false
   }
@@ -573,7 +584,7 @@ function replaceOne() {
   const rep = $('#replace-input').value
   if (!q) return
   const sel = window.getSelection()
-  if (!sel || sel.toString() !== q) {
+  if (!sel || sel.toString() !== q || !selectionInEditor()) {
     if (!rawFind(q)) return
   }
   document.execCommand('insertText', false, rep)
@@ -772,7 +783,7 @@ async function handleConfirmClose() {
   }
   if (choice === 'save') {
     for (const t of dirty) {
-      await saveTab(t, false)
+      await saveTab(t)
       if (t.dirty) {
         api.closeReply('cancel')
         return
@@ -985,7 +996,9 @@ async function handleMenu(cmd, arg) {
       break
     case 'save': {
       const t = activeTab()
-      if (t) saveTab(t, false)
+      if (!t) toast('没有打开的文档')
+      else if (!t.ready) toast('文档尚未加载完成，请稍候')
+      else saveTab(t)
       break
     }
     case 'save-as':

@@ -15,14 +15,19 @@ if (args.userData) {
 
 function parseArgv(argv) {
   const start = app.isPackaged ? 1 : 2
+  const hooksAllowed = !app.isPackaged || process.env.IM_DEV_TOOLS === '1'
   const out = { file: null, shot: null, evalJs: null, userData: null }
   for (const a of argv.slice(start)) {
-    if (a.startsWith('--screenshot=')) out.shot = a.slice(13)
-    else if (a.startsWith('--eval=')) out.evalJs = a.slice(7)
-    else if (a.startsWith('--preeval=')) out.preeval = a.slice(10)
-    else if (a.startsWith('--userdata=')) out.userData = a.slice(11)
-    else if (a === '--keytest') out.keytest = true
-    else if (!a.startsWith('-') && /\.(md|markdown|txt)$/i.test(a)) out.file = a
+    if (a.startsWith('--screenshot=')) {
+      if (hooksAllowed) out.shot = a.slice(13)
+    } else if (a.startsWith('--eval=')) {
+      if (hooksAllowed) out.evalJs = a.slice(7)
+    } else if (a.startsWith('--preeval=')) {
+      if (hooksAllowed) out.preeval = a.slice(10)
+    } else if (a.startsWith('--userdata=')) out.userData = a.slice(11)
+    else if (a === '--keytest') {
+      if (hooksAllowed) out.keytest = true
+    } else if (!a.startsWith('-') && /\.(md|markdown|txt)$/i.test(a)) out.file = a
   }
   return out
 }
@@ -53,7 +58,7 @@ function winFor(e) {
     const w = BrowserWindow.fromWebContents(e.sender)
     if (w) return w
   }
-  return BrowserWindow.getFocusedWindow() || win
+  return BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || win
 }
 
 function buildMenu() {
@@ -385,7 +390,12 @@ function registerIpc() {
     }
   })
 
+  const TEXT_EXT = /\.(md|markdown|txt)$/i
+
   ipcMain.handle('fs:read', (e, p) => {
+    if (typeof p !== 'string' || !TEXT_EXT.test(p)) {
+      return { ok: false, error: '仅支持读取 Markdown/文本文件' }
+    }
     try {
       return { ok: true, content: decodeFileText(fs.readFileSync(p)) }
     } catch (err) {
@@ -394,6 +404,9 @@ function registerIpc() {
   })
 
   ipcMain.handle('fs:write', (e, p, c) => {
+    if (typeof p !== 'string' || typeof c !== 'string' || !TEXT_EXT.test(p)) {
+      return { ok: false, error: '仅支持写入 Markdown/文本文件' }
+    }
     try {
       fs.writeFileSync(p, c, 'utf8')
       return { ok: true }
@@ -447,7 +460,7 @@ function registerIpc() {
       filters: [{ name: 'PDF', extensions: ['pdf'] }],
     })
     if (r.canceled || !r.filePath) return { ok: false, canceled: true }
-    const tmp = path.join(app.getPath('temp'), 'instant-markdown-export.html')
+    const tmp = path.join(app.getPath('temp'), 'instant-markdown-export-' + Date.now() + '-' + process.pid + '.html')
     let pw = null
     try {
       fs.writeFileSync(tmp, html, 'utf8')
@@ -516,10 +529,11 @@ if (!gotLock) {
 } else {
   app.on('second-instance', (e, argv2) => {
     const a2 = parseArgv(argv2)
-    if (win) {
-      if (win.isMinimized()) win.restore()
-      win.focus()
-      if (a2.file) win.webContents.send('open-file', path.resolve(a2.file))
+    const target = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+    if (target) {
+      if (target.isMinimized()) target.restore()
+      target.focus()
+      if (a2.file) target.webContents.send('open-file', path.resolve(a2.file))
     }
   })
   app.whenReady().then(() => {
