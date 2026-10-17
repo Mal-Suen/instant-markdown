@@ -152,13 +152,16 @@ function vditorOptions(tab, content) {
           tab._outlineTimer = setTimeout(renderOutlinePanel, 500)
           if (e.isComposing) return
           try {
-            normalizeFullwidthInBlock()
+            if (e.inputType === 'insertFromPaste') normalizeFullwidthDocument()
+            else normalizeFullwidthInBlock()
           } catch {}
         })
       }
-      try {
-        tab.vditor.focus()
-      } catch {}
+      if (state.activeId === tab.id) {
+        try {
+          tab.vditor.focus()
+        } catch {}
+      }
       updateStatus()
       renderOutlinePanel()
     },
@@ -326,11 +329,20 @@ function suggestName(tab) {
   return /\.md$/i.test(tab.name) ? tab.name : tab.name + '.md'
 }
 
+let saveInProgress = false
+
 async function saveTab(tab) {
+  if (saveInProgress) return
   if (!tab.vditor || !tab.dirty || !tab.ready) return
   const content = tabValue(tab)
   if (!tab.path) {
-    const p = await api.saveFileDialog(suggestName(tab), content)
+    saveInProgress = true
+    let p
+    try {
+      p = await api.saveFileDialog(suggestName(tab), content)
+    } finally {
+      saveInProgress = false
+    }
     if (!p) return
     tab.path = p
     tab.name = pathBasename(p)
@@ -348,11 +360,20 @@ async function saveTab(tab) {
 }
 
 async function saveAs() {
+  if (saveInProgress) return
   const tab = activeTab()
   if (!tab || !tab.vditor || !tab.ready) return
   const content = tabValue(tab)
-  const p = await api.saveFileDialog(suggestName(tab), content)
+  saveInProgress = true
+  let p
+  try {
+    p = await api.saveFileDialog(suggestName(tab), content)
+  } finally {
+    saveInProgress = false
+  }
   if (!p) return
+  const dup = state.tabs.find((t) => t !== tab && t.path === p)
+  if (dup) await closeTab(dup.id)
   tab.path = p
   tab.name = pathBasename(p)
   tab.dirty = false
@@ -668,6 +689,7 @@ function currentHeadingLevel() {
 function applyHeading(level) {
   const b = currentBlock()
   if (!b) return
+  if (!/^(P|H[1-6])$/.test(b.tagName)) return
   if (level === 'up' || level === 'down') {
     const cur = currentHeadingLevel()
     if (level === 'up') {
@@ -707,6 +729,7 @@ function clearFormat() {
   if (!node.closest) return
   const inlineNode = node.closest('.vditor-ir__node')
   if (!inlineNode) return
+  if (!/^(SPAN|H[1-6])$/.test(inlineNode.tagName)) return
   const clone = inlineNode.cloneNode(true)
   clone.querySelectorAll('.vditor-ir__marker').forEach((m) => m.remove())
   const text = clone.textContent
@@ -718,29 +741,34 @@ function clearFormat() {
   document.execCommand('insertText', false, text)
 }
 
+const FW_CHARS = '\uFF0A\uFF3F\uFF04\uFF3E\uFF5B\uFF5D\uFF3C\uFF5C\uFF1D\uFF03\uFF1E'
+const FW_TARGET = new RegExp('[' + FW_CHARS + ']|\\uFF0D\\s')
+
 function normalizeSyntax(text) {
   if (!text) return text
-  const has = /[\uFF0A\uFF3F]/.test(text) || /(^|\n)[\uFF03\uFF1E]/.test(text) || /(^|\n)\uFF0D\s/.test(text)
-  if (!has) return text
+  if (!FW_TARGET.test(text)) return text
   return text
     .replace(/\uFF0A/g, '*')
     .replace(/\uFF3F/g, '_')
+    .replace(/\uFF04/g, '$')
+    .replace(/\uFF3E/g, '^')
+    .replace(/\uFF5B/g, '{')
+    .replace(/\uFF5D/g, '}')
+    .replace(/\uFF3C/g, '\\')
+    .replace(/\uFF5C/g, '|')
+    .replace(/\uFF1D/g, '=')
     .replace(/(^|\n)\uFF03/g, '$1#')
     .replace(/(^|\n)\uFF1E/g, '$1>')
     .replace(/(^|\n)\uFF0D /g, '$1- ')
 }
 
-function normalizeFullwidthInBlock() {
-  const block = currentBlock()
-  if (!block) return
+function normalizeFullwidthIn(root) {
   const targets = []
-  const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT)
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
   let node
   while ((node = walker.nextNode())) {
     if (!node.isConnected) continue
-    if (/[\uFF0A\uFF3F\uFF03\uFF1E]/.test(node.data) || /\uFF0D\s/.test(node.data)) {
-      targets.push(node)
-    }
+    if (FW_TARGET.test(node.data)) targets.push(node)
   }
   if (!targets.length) return
   setTimeout(() => {
@@ -757,6 +785,18 @@ function normalizeFullwidthInBlock() {
       document.execCommand('insertText', false, normalized)
     }
   }, 0)
+}
+
+function normalizeFullwidthInBlock() {
+  const block = currentBlock()
+  if (block) normalizeFullwidthIn(block)
+}
+
+function normalizeFullwidthDocument() {
+  const tab = activeTab()
+  if (!tab || !tab.host) return
+  const reset = tab.host.querySelector('.vditor-ir .vditor-reset')
+  if (reset) normalizeFullwidthIn(reset)
 }
 
 function reopenClosed() {
@@ -1221,6 +1261,7 @@ window.__im = {
   applyHeading,
   doAction,
   replaceAll,
+  normalizeDoc: normalizeFullwidthDocument,
   setDark,
   setFocus,
   setTypewriter,
