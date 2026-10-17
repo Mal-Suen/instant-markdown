@@ -140,7 +140,7 @@ function vditorOptions(tab, content) {
       const irEl = tab.host ? tab.host.querySelector('.vditor-ir') : null
       if (irEl && !tab._inputAttached) {
         tab._inputAttached = true
-        irEl.addEventListener('input', (e) => {
+        irEl.addEventListener('input', () => {
           if (tab._initializing) return
           if (!tab.dirty) {
             tab.dirty = true
@@ -150,11 +150,6 @@ function vditorOptions(tab, content) {
           tab._statusTimer = setTimeout(() => updateStatus(), 400)
           clearTimeout(tab._outlineTimer)
           tab._outlineTimer = setTimeout(renderOutlinePanel, 500)
-          if (e.isComposing) return
-          try {
-            if (e.inputType === 'insertFromPaste') normalizeFullwidthDocument()
-            else normalizeFullwidthInBlock()
-          } catch {}
         })
       }
       if (state.activeId === tab.id) {
@@ -207,7 +202,7 @@ async function openPath(filePath) {
     id: ++tabSeq,
     path: filePath,
     name: pathBasename(filePath),
-    content: normalizeSyntax(r.content),
+    content: r.content,
     dirty: false,
     vditor: null,
     host: null,
@@ -741,64 +736,6 @@ function clearFormat() {
   document.execCommand('insertText', false, text)
 }
 
-const FW_CHARS = '\uFF0A\uFF3F\uFF04\uFF3E\uFF5B\uFF5D\uFF3C\uFF5C\uFF1D\uFF03\uFF1E'
-const FW_TARGET = new RegExp('[' + FW_CHARS + ']|\\uFF0D\\s')
-
-function normalizeSyntax(text) {
-  if (!text) return text
-  if (!FW_TARGET.test(text)) return text
-  return text
-    .replace(/\uFF0A/g, '*')
-    .replace(/\uFF3F/g, '_')
-    .replace(/\uFF04/g, '$')
-    .replace(/\uFF3E/g, '^')
-    .replace(/\uFF5B/g, '{')
-    .replace(/\uFF5D/g, '}')
-    .replace(/\uFF3C/g, '\\')
-    .replace(/\uFF5C/g, '|')
-    .replace(/\uFF1D/g, '=')
-    .replace(/(^|\n)\uFF03/g, '$1#')
-    .replace(/(^|\n)\uFF1E/g, '$1>')
-    .replace(/(^|\n)\uFF0D /g, '$1- ')
-}
-
-function normalizeFullwidthIn(root) {
-  const targets = []
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-  let node
-  while ((node = walker.nextNode())) {
-    if (!node.isConnected) continue
-    if (FW_TARGET.test(node.data)) targets.push(node)
-  }
-  if (!targets.length) return
-  setTimeout(() => {
-    const sel = window.getSelection()
-    if (!sel) return
-    for (const tn of targets) {
-      if (!tn.isConnected) continue
-      const normalized = normalizeSyntax(tn.data)
-      if (normalized === tn.data) continue
-      const range = document.createRange()
-      range.selectNodeContents(tn)
-      sel.removeAllRanges()
-      sel.addRange(range)
-      document.execCommand('insertText', false, normalized)
-    }
-  }, 0)
-}
-
-function normalizeFullwidthInBlock() {
-  const block = currentBlock()
-  if (block) normalizeFullwidthIn(block)
-}
-
-function normalizeFullwidthDocument() {
-  const tab = activeTab()
-  if (!tab || !tab.host) return
-  const reset = tab.host.querySelector('.vditor-ir .vditor-reset')
-  if (reset) normalizeFullwidthIn(reset)
-}
-
 function reopenClosed() {
   const p = closedStack.shift()
   if (p) openPath(p)
@@ -1261,7 +1198,6 @@ window.__im = {
   applyHeading,
   doAction,
   replaceAll,
-  normalizeDoc: normalizeFullwidthDocument,
   setDark,
   setFocus,
   setTypewriter,
