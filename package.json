@@ -4,7 +4,8 @@
   "description": "即时渲染 Markdown 编辑器，对标 Typora 的所见即所得体验",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --win"
   },
   "author": "Mal-Suen",
   "license": "GPL-3.0",
@@ -12,6 +13,29 @@
     "vditor": "^4.0.0"
   },
   "devDependencies": {
-    "electron": "^44.9.0"
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.mal-suen.instant-markdown",
+    "productName": "Instant Markdown",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "InstantMarkdown-Setup-${version}.${ext}",
+      "shortcutName": "Instant Markdown"
+    }
   }
 }

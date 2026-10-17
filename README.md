@@ -66,9 +66,28 @@ set ELECTRON_MIRROR=https://cdn.npmmirror.com/binaries/electron/&& npm install -
 └── DESIGN.md        设计规范
 ```
 
+## 打包
+
+```
+npm run dist
+```
+
+构建产物在 `dist/` 目录：
+
+- `win-unpacked/Instant Markdown.exe`：免安装，双击直接运行
+- `InstantMarkdown-Setup-0.1.0.exe`：NSIS 安装包，可选安装目录
+
+打包需要下载 Electron 与 NSIS 工具，国内网络建议使用镜像：
+
+```
+set ELECTRON_MIRROR=https://cdn.npmmirror.com/binaries/electron/&& set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/&& npm run dist
+```
+
+应用图标 `build/icon.png` 由 `tools/make-icon.js` 纯 Node 生成，可修改脚本后重新运行再打包。
+
 ## 后续计划
 
-- electron-builder 打包独立 exe 与 .md 文件关联
+- .md 文件关联双击打开
 - 文件外部变更监听与冲突提示
 - 图片粘贴保存到本地相对路径
 - 自定义主题与更多内容主题

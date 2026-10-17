@@ -9,8 +9,9 @@ let viewState = { sidebar: true, outline: true, focus: false, typewriter: false,
 const args = parseArgv(process.argv)
 
 function parseArgv(argv) {
+  const start = app.isPackaged ? 1 : 2
   const out = { file: null, shot: null, evalJs: null }
-  for (const a of argv.slice(2)) {
+  for (const a of argv.slice(start)) {
     if (a.startsWith('--screenshot=')) out.shot = a.slice(13)
     else if (a.startsWith('--eval=')) out.evalJs = a.slice(7)
     else if (!a.startsWith('-') && /\.(md|markdown|txt)$/i.test(a)) out.file = a
