@@ -106,7 +106,7 @@ function vditorOptions(tab, content) {
     cache: { enable: false },
     tab: '    ',
     typewriterMode: state.settings.typewriter,
-    outline: { enable: true, position: 'left' },
+    outline: { enable: false },
     placeholder: '开始书写…',
     value: content,
     preview: {
@@ -136,6 +136,7 @@ function vditorOptions(tab, content) {
         tab.vditor.focus()
       } catch {}
       updateStatus()
+      renderOutlinePanel()
     },
   }
 }
@@ -161,6 +162,8 @@ function onEditorInput(tab, value) {
   }
   updateStatus(value)
   scheduleAutosave(tab)
+  clearTimeout(tab._outlineTimer)
+  tab._outlineTimer = setTimeout(renderOutlinePanel, 500)
 }
 
 // ---------- 标签页 ----------
@@ -204,9 +207,6 @@ function activateTab(id) {
   if (!tab) return
   flushPendingSave()
   state.activeId = id
-  for (const t of state.tabs) {
-    if (t.host) t.host.classList.toggle('active', t.id === id)
-  }
   if (!tab.vditor) {
     createEditorForTab(tab)
   } else {
@@ -216,11 +216,15 @@ function activateTab(id) {
       } catch {}
     }, 60)
   }
+  for (const t of state.tabs) {
+    if (t.host) t.host.classList.toggle('active', t.id === id)
+  }
   renderTabbar()
   renderTreeActive()
   updateStatus()
   updateTitle()
   updateWelcome()
+  renderOutlinePanel()
 }
 
 async function closeTab(id) {
@@ -253,6 +257,7 @@ async function closeTab(id) {
       updateStatus('')
       updateTitle()
       updateWelcome()
+      renderOutlinePanel()
     }
   } else {
     renderTabbar()
@@ -502,6 +507,35 @@ function updateTitle() {
   document.title = tab ? tab.name + ' — Instant Markdown' : 'Instant Markdown'
 }
 
+// ---------- 大纲面板 ----------
+
+function renderOutlinePanel() {
+  const panel = $('#outline-panel')
+  const tab = activeTab()
+  if (!tab || !tab.ready || !tab.host) {
+    panel.innerHTML = ''
+    return
+  }
+  const reset = tab.host.querySelector('.vditor-ir .vditor-reset')
+  if (!reset) {
+    panel.innerHTML = ''
+    return
+  }
+  const heads = reset.querySelectorAll('h1,h2,h3,h4,h5,h6')
+  const frag = document.createDocumentFragment()
+  heads.forEach((h, i) => {
+    const text = h.textContent.replace(/^#+\s*/, '').trim()
+    if (!text) return
+    const item = document.createElement('div')
+    item.className = 'outline-item outline-l' + h.tagName[1]
+    item.dataset.idx = i
+    item.textContent = text
+    frag.appendChild(item)
+  })
+  panel.innerHTML = ''
+  panel.appendChild(frag)
+}
+
 // ---------- 查找 ----------
 
 function openFind() {
@@ -597,6 +631,7 @@ function setOutline(on) {
   state.settings.outline = on
   saveSettings()
   document.body.classList.toggle('no-outline', !on)
+  if (on) renderOutlinePanel()
   syncViewState()
 }
 
@@ -803,6 +838,18 @@ function bindStaticEvents() {
     } else if (e.key === 'Escape') {
       closeFind()
     }
+  })
+
+  $('#outline-panel').addEventListener('click', (e) => {
+    const item = e.target.closest('.outline-item')
+    if (!item) return
+    const tab = activeTab()
+    if (!tab || !tab.host) return
+    const reset = tab.host.querySelector('.vditor-ir .vditor-reset')
+    if (!reset) return
+    const heads = reset.querySelectorAll('h1,h2,h3,h4,h5,h6')
+    const h = heads[Number(item.dataset.idx)]
+    if (h) h.scrollIntoView({ behavior: 'smooth', block: 'start' })
   })
 
   window.addEventListener('keydown', globalKeydown, true)

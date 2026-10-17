@@ -8,12 +8,19 @@ let viewState = { sidebar: true, outline: true, focus: false, typewriter: false,
 
 const args = parseArgv(process.argv)
 
+if (args.userData) {
+  try {
+    app.setPath('userData', args.userData)
+  } catch {}
+}
+
 function parseArgv(argv) {
   const start = app.isPackaged ? 1 : 2
-  const out = { file: null, shot: null, evalJs: null }
+  const out = { file: null, shot: null, evalJs: null, userData: null }
   for (const a of argv.slice(start)) {
     if (a.startsWith('--screenshot=')) out.shot = a.slice(13)
     else if (a.startsWith('--eval=')) out.evalJs = a.slice(7)
+    else if (a.startsWith('--userdata=')) out.userData = a.slice(11)
     else if (!a.startsWith('-') && /\.(md|markdown|txt)$/i.test(a)) out.file = a
   }
   return out
@@ -176,7 +183,7 @@ function createWindow() {
     win = null
   })
   win.webContents.once('did-finish-load', () => {
-    if (args.file) win.webContents.send('open-file', args.file)
+    if (args.file) win.webContents.send('open-file', path.resolve(args.file))
     if (args.shot) runCapture(args)
   })
 }
@@ -229,6 +236,23 @@ function listDir(dir, depth) {
   return out
 }
 
+function decodeFileText(buf) {
+  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    return new TextDecoder('utf-8').decode(buf.subarray(3))
+  }
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    return new TextDecoder('utf-16le').decode(buf.subarray(2))
+  }
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    return new TextDecoder('utf-16be').decode(buf.subarray(2))
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf)
+  } catch {
+    return new TextDecoder('gbk').decode(buf)
+  }
+}
+
 function registerIpc() {
   ipcMain.handle('dialog:open-file', async () => {
     const r = await dialog.showOpenDialog(win, {
@@ -259,7 +283,7 @@ function registerIpc() {
 
   ipcMain.handle('fs:read', (e, p) => {
     try {
-      return { ok: true, content: fs.readFileSync(p, 'utf8') }
+      return { ok: true, content: decodeFileText(fs.readFileSync(p)) }
     } catch (err) {
       return { ok: false, error: String(err) }
     }
@@ -369,7 +393,7 @@ if (!gotLock) {
     if (win) {
       if (win.isMinimized()) win.restore()
       win.focus()
-      if (a2.file) win.webContents.send('open-file', a2.file)
+      if (a2.file) win.webContents.send('open-file', path.resolve(a2.file))
     }
   })
   app.whenReady().then(() => {
