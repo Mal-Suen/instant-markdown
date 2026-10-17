@@ -1,0 +1,17 @@
+{
+  "name": "instant-markdown",
+  "version": "0.1.0",
+  "description": "即时渲染 Markdown 编辑器，对标 Typora 的所见即所得体验",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "author": "Mal-Suen",
+  "license": "GPL-3.0",
+  "dependencies": {
+    "vditor": "^4.0.0"
+  },
+  "devDependencies": {
+    "electron": "^44.9.0"
+  }
+}

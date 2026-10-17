@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src file: data: blob: http: https: 'unsafe-inline'; script-src 'self' file:">
+  <title>Instant Markdown</title>
+  <link rel="stylesheet" href="../node_modules/vditor/dist/index.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-head">
+        <span id="workspace-name" class="workspace-name">未打开文件夹</span>
+        <span class="sidebar-actions">
+          <button id="btn-refresh" class="icon-btn" title="刷新文件树">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.65 2.35v3.2h-3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.3 5.4A5.5 5.5 0 1 0 13.5 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          </button>
+          <button id="btn-closedir" class="icon-btn" title="关闭工作区">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          </button>
+        </span>
+      </div>
+      <div id="file-tree" class="file-tree"></div>
+    </aside>
+    <main id="main">
+      <div id="tabbar"></div>
+      <div id="editor-area">
+        <div id="editor-host"></div>
+        <div id="welcome">
+          <div class="welcome-card">
+            <div class="welcome-title">Instant Markdown</div>
+            <div class="welcome-sub">即时渲染的 Markdown 编辑器</div>
+            <div class="welcome-actions">
+              <button class="btn btn-primary" id="w-new">新建文档</button>
+              <button class="btn btn-ghost" id="w-open">打开文件</button>
+              <button class="btn btn-ghost" id="w-dir">打开文件夹</button>
+            </div>
+            <div class="welcome-recent" id="w-recent-wrap">
+              <div class="recent-title">最近打开</div>
+              <div id="w-recent"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <footer id="statusbar">
+        <span id="st-path" class="st-path"></span>
+        <span id="st-count" class="st-count"></span>
+      </footer>
+    </main>
+  </div>
+  <div id="findbar" hidden>
+    <input id="find-input" type="text" placeholder="查找内容…" />
+    <button id="find-prev" class="icon-btn" title="上一个（Shift+Enter）">↑</button>
+    <button id="find-next" class="icon-btn" title="下一个（Enter）">↓</button>
+    <button id="find-close" class="icon-btn" title="关闭（Esc）">✕</button>
+  </div>
+  <div id="toast" hidden></div>
+  <script src="../node_modules/vditor/dist/index.js"></script>
+  <script id="vditorIconScript" src="../node_modules/vditor/dist/js/icons/ant.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
