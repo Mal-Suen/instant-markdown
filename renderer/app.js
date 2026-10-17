@@ -138,6 +138,16 @@ function vditorOptions(tab, content) {
           )
         } catch {}
       }
+      const irEl = tab.host ? tab.host.querySelector('.vditor-ir') : null
+      if (irEl && !tab._fwAttached) {
+        tab._fwAttached = true
+        irEl.addEventListener('input', (e) => {
+          if (e.isComposing) return
+          try {
+            normalizeFullwidthInBlock()
+          } catch {}
+        })
+      }
       try {
         tab.vditor.focus()
       } catch {}
@@ -198,7 +208,7 @@ async function openPath(filePath) {
     id: ++tabSeq,
     path: filePath,
     name: pathBasename(filePath),
-    content: r.content,
+    content: normalizeSyntax(r.content),
     dirty: false,
     vditor: null,
     host: null,
@@ -714,6 +724,47 @@ function clearFormat() {
   sel.removeAllRanges()
   sel.addRange(range)
   document.execCommand('insertText', false, text)
+}
+
+function normalizeSyntax(text) {
+  if (!text) return text
+  const has = /[\uFF0A\uFF3F]/.test(text) || /(^|\n)[\uFF03\uFF1E]/.test(text) || /(^|\n)\uFF0D\s/.test(text)
+  if (!has) return text
+  return text
+    .replace(/\uFF0A/g, '*')
+    .replace(/\uFF3F/g, '_')
+    .replace(/(^|\n)\uFF03/g, '$1#')
+    .replace(/(^|\n)\uFF1E/g, '$1>')
+    .replace(/(^|\n)\uFF0D /g, '$1- ')
+}
+
+function normalizeFullwidthInBlock() {
+  const block = currentBlock()
+  if (!block) return
+  const targets = []
+  const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT)
+  let node
+  while ((node = walker.nextNode())) {
+    if (!node.isConnected) continue
+    if (/[\uFF0A\uFF3F\uFF03\uFF1E]/.test(node.data) || /\uFF0D\s/.test(node.data)) {
+      targets.push(node)
+    }
+  }
+  if (!targets.length) return
+  setTimeout(() => {
+    const sel = window.getSelection()
+    if (!sel) return
+    for (const tn of targets) {
+      if (!tn.isConnected) continue
+      const normalized = normalizeSyntax(tn.data)
+      if (normalized === tn.data) continue
+      const range = document.createRange()
+      range.selectNodeContents(tn)
+      sel.removeAllRanges()
+      sel.addRange(range)
+      document.execCommand('insertText', false, normalized)
+    }
+  }, 0)
 }
 
 function reopenClosed() {

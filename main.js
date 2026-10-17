@@ -19,7 +19,9 @@ function parseArgv(argv) {
   for (const a of argv.slice(start)) {
     if (a.startsWith('--screenshot=')) out.shot = a.slice(13)
     else if (a.startsWith('--eval=')) out.evalJs = a.slice(7)
+    else if (a.startsWith('--preeval=')) out.preeval = a.slice(10)
     else if (a.startsWith('--userdata=')) out.userData = a.slice(11)
+    else if (a === '--keytest') out.keytest = true
     else if (!a.startsWith('-') && /\.(md|markdown|txt)$/i.test(a)) out.file = a
   }
   return out
@@ -255,6 +257,48 @@ function createWindow(isPrimary) {
 async function runCapture(a) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms))
   await wait(2600)
+  if (a.preeval && win) {
+    try {
+      await win.webContents.executeJavaScript(a.preeval)
+    } catch (err) {
+      console.log('[preeval error]', String(err))
+    }
+    await wait(250)
+  }
+  if (a.keytest && win) {
+    const wc = win.webContents
+    let dbg = null
+    try {
+      wc.debugger.attach('1.3')
+      dbg = wc.debugger
+    } catch {}
+    if (dbg) {
+      // 阶段A：混合输入——直接 ** ＋ 输入法组字提交中文 ＋ 直接 **
+      await dbg.sendCommand('Input.insertText', { text: '**' })
+      await wait(200)
+      await dbg.sendCommand('Input.imeSetComposition', { text: '加', selectionStart: 1, selectionEnd: 1 })
+      await wait(150)
+      await dbg.sendCommand('Input.imeSetComposition', { text: '加粗', selectionStart: 2, selectionEnd: 2 })
+      await wait(150)
+      await dbg.sendCommand('Input.insertText', { text: '加粗' })
+      await wait(300)
+      await dbg.sendCommand('Input.insertText', { text: '**' })
+      await wait(500)
+      // 阶段B：整串经输入法组字提交
+      await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'End', code: 'End', windowsVirtualKeyCode: 35 })
+      await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'End', code: 'End', windowsVirtualKeyCode: 35 })
+      await wait(150)
+      await dbg.sendCommand('Input.imeSetComposition', { text: '**整体', selectionStart: 3, selectionEnd: 3 })
+      await wait(150)
+      await dbg.sendCommand('Input.imeSetComposition', { text: '**整体提交', selectionStart: 5, selectionEnd: 5 })
+      await wait(150)
+      await dbg.sendCommand('Input.insertText', { text: '**整体提交**' })
+      await wait(600)
+      try {
+        dbg.detach()
+      } catch {}
+    }
+  }
   if (a.evalJs) {
     try {
       await win.webContents.executeJavaScript(a.evalJs)
