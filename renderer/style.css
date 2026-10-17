@@ -411,7 +411,7 @@ body.no-outline #outline-panel { display: none; }
   right: 16px;
   z-index: 100;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 6px;
   background: var(--canvas);
   border: 1px solid var(--hairline);
@@ -421,7 +421,19 @@ body.no-outline #outline-panel { display: none; }
 #findbar[hidden] {
   display: none;
 }
-#find-input {
+.find-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.find-replace-row {
+  display: none;
+}
+#findbar.with-replace .find-replace-row {
+  display: flex;
+}
+#find-input,
+#replace-input {
   border: none;
   outline: none;
   background: var(--parchment);
@@ -433,6 +445,23 @@ body.no-outline #outline-panel { display: none; }
   color: var(--ink);
 }
 #find-input:focus { box-shadow: 0 0 0 2px var(--blue); }
+#replace-input:focus { box-shadow: 0 0 0 2px var(--blue); }
+.find-btn {
+  appearance: none;
+  border: none;
+  background: var(--parchment);
+  color: var(--ink-80);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 9999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.find-btn:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
 
 /* ---------- 提示与弹层 ---------- */
 

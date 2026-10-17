@@ -57,6 +57,7 @@ const state = {
 
 let tabSeq = 0
 let toastTimer = null
+const closedStack = []
 
 function loadSettings() {
   try {
@@ -107,6 +108,11 @@ function vditorOptions(tab, content) {
     tab: '    ',
     typewriterMode: state.settings.typewriter,
     outline: { enable: false },
+    toolbar: [
+      'bold', 'italic', 'strike', 'link', 'inline-code',
+      'list', 'ordered-list', 'check', 'outdent', 'indent',
+      'quote', 'line', 'code', 'table',
+    ],
     placeholder: '开始书写…',
     value: content,
     preview: {
@@ -246,6 +252,10 @@ async function closeTab(id) {
   if (tab.host) tab.host.remove()
   const idx = state.tabs.findIndex((t) => t.id === id)
   state.tabs.splice(idx, 1)
+  if (tab.path) {
+    closedStack.unshift(tab.path)
+    if (closedStack.length > 10) closedStack.pop()
+  }
   if (state.activeId === id) {
     const next = state.tabs[idx] || state.tabs[idx - 1]
     if (next) {
@@ -538,9 +548,10 @@ function renderOutlinePanel() {
 
 // ---------- 查找 ----------
 
-function openFind() {
+function openFind(withReplace) {
   if (!activeTab()) return
   $('#findbar').hidden = false
+  $('#findbar').classList.toggle('with-replace', !!withReplace)
   const input = $('#find-input')
   input.focus()
   input.select()
@@ -556,6 +567,159 @@ function doFind(backwards) {
   try {
     window.find(q, false, backwards, true)
   } catch {}
+}
+
+function rawFind(q) {
+  try {
+    return window.find(q, false, false, true)
+  } catch {
+    return false
+  }
+}
+
+function replaceOne() {
+  const q = $('#find-input').value
+  const rep = $('#replace-input').value
+  if (!q) return
+  const sel = window.getSelection()
+  if (!sel || sel.toString() !== q) {
+    if (!rawFind(q)) return
+  }
+  document.execCommand('insertText', false, rep)
+}
+
+function replaceAll() {
+  const q = $('#find-input').value
+  const rep = $('#replace-input').value
+  if (!q) return
+  let n = 0
+  while (n < 500) {
+    if (!rawFind(q)) break
+    document.execCommand('insertText', false, rep)
+    n++
+    if (rep.indexOf(q) >= 0 && n >= 20) break
+  }
+  toast('已替换 ' + n + ' 处')
+}
+
+// ---------- 编辑动作 ----------
+
+function triggerToolbar(name) {
+  const tab = activeTab()
+  if (!tab || !tab.ready || !tab.host) return false
+  const btn = tab.host.querySelector('.vditor-toolbar button[data-type="' + name + '"]')
+  if (btn) {
+    btn.click()
+    return true
+  }
+  return false
+}
+
+function insertAtCursor(text) {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return
+  let node = sel.getRangeAt(0).startContainer
+  if (node.nodeType === 3) node = node.parentNode
+  if (!node.closest || !node.closest('.vditor-ir')) return
+  document.execCommand('insertText', false, text)
+}
+
+function doAction(name) {
+  const tab = activeTab()
+  if (!tab || !tab.ready) return
+  switch (name) {
+    case 'bold':
+    case 'italic':
+    case 'strike':
+    case 'link':
+    case 'inline-code':
+    case 'list':
+    case 'ordered-list':
+    case 'check':
+    case 'quote':
+    case 'line':
+    case 'code':
+    case 'table':
+    case 'indent':
+    case 'outdent':
+      triggerToolbar(name)
+      break
+    case 'math':
+      insertAtCursor('$$\n\n$$')
+      break
+    case 'image':
+      insertAtCursor('![]()')
+      break
+    case 'clear-format':
+      clearFormat()
+      break
+  }
+}
+
+function currentHeadingLevel() {
+  const b = currentBlock()
+  if (!b) return 0
+  const m = /^H([1-6])$/.exec(b.tagName)
+  return m ? Number(m[1]) : 0
+}
+
+function applyHeading(level) {
+  const b = currentBlock()
+  if (!b) return
+  if (level === 'up' || level === 'down') {
+    const cur = currentHeadingLevel()
+    if (level === 'up') {
+      if (cur <= 1) return
+      level = cur - 1
+    } else {
+      if (cur === 0) return
+      level = cur >= 6 ? 0 : cur + 1
+    }
+  }
+  const sel = window.getSelection()
+  if (!sel) return
+  const isHeading = /^H[1-6]$/.test(b.tagName)
+  const marker = isHeading ? b.querySelector('.vditor-ir__marker') : null
+  if (marker) {
+    const range = document.createRange()
+    range.selectNodeContents(marker)
+    sel.removeAllRanges()
+    sel.addRange(range)
+    if (level === 0) document.execCommand('delete')
+    else document.execCommand('insertText', false, '#'.repeat(level))
+  } else if (level > 0) {
+    const range = document.createRange()
+    range.setStart(b, 0)
+    range.collapse(true)
+    sel.removeAllRanges()
+    sel.addRange(range)
+    document.execCommand('insertText', false, '#'.repeat(level) + ' ')
+  }
+}
+
+function clearFormat() {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return
+  let node = sel.getRangeAt(0).startContainer
+  if (node.nodeType === 3) node = node.parentNode
+  if (!node.closest) return
+  const inlineNode = node.closest('.vditor-ir__node')
+  if (!inlineNode) return
+  const clone = inlineNode.cloneNode(true)
+  clone.querySelectorAll('.vditor-ir__marker').forEach((m) => m.remove())
+  const text = clone.textContent
+  if (!text) return
+  const range = document.createRange()
+  range.selectNodeContents(inlineNode)
+  sel.removeAllRanges()
+  sel.addRange(range)
+  document.execCommand('insertText', false, text)
+}
+
+function reopenClosed() {
+  const p = closedStack.shift()
+  if (p) openPath(p)
+  else toast('没有已关闭的文件')
 }
 
 // ---------- 专注模式 ----------
@@ -774,7 +938,31 @@ async function handleMenu(cmd, arg) {
       exportHtml()
       break
     case 'find':
-      openFind()
+      openFind(false)
+      break
+    case 'replace':
+      openFind(true)
+      break
+    case 'find-next':
+      doFind(false)
+      break
+    case 'find-prev':
+      doFind(true)
+      break
+    case 'close-tab':
+      if (state.activeId != null) closeTab(state.activeId)
+      break
+    case 'reopen-closed':
+      reopenClosed()
+      break
+    case 'heading':
+      applyHeading(arg)
+      break
+    case 'act':
+      doAction(arg)
+      break
+    case 'cycle-tab':
+      cycleTab(1)
       break
     case 'toggle-sidebar':
       setSidebar(!state.settings.sidebar)
@@ -831,6 +1019,8 @@ function bindStaticEvents() {
   $('#find-next').addEventListener('click', () => doFind(false))
   $('#find-prev').addEventListener('click', () => doFind(true))
   $('#find-close').addEventListener('click', closeFind)
+  $('#replace-one').addEventListener('click', replaceOne)
+  $('#replace-all').addEventListener('click', replaceAll)
   $('#find-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault()
@@ -839,6 +1029,15 @@ function bindStaticEvents() {
       closeFind()
     }
   })
+  $('#replace-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      replaceOne()
+    } else if (e.key === 'Escape') {
+      closeFind()
+    }
+  })
+  window.addEventListener('focus', syncViewState)
 
   $('#outline-panel').addEventListener('click', (e) => {
     const item = e.target.closest('.outline-item')
@@ -883,21 +1082,23 @@ function toast(msg) {
 
 function showShortcuts() {
   const rows = [
-    ['新建文档', 'Ctrl+N'],
-    ['打开文件', 'Ctrl+O'],
-    ['打开文件夹', 'Ctrl+Shift+O'],
-    ['保存', 'Ctrl+S'],
-    ['另存为', 'Ctrl+Shift+S'],
-    ['关闭标签页', 'Ctrl+W'],
-    ['切换标签页', 'Ctrl+Tab'],
-    ['查找', 'Ctrl+F'],
+    ['新建 / 新建窗口', 'Ctrl+N / Ctrl+Shift+N'],
+    ['打开 / 重新打开关闭的文件', 'Ctrl+O / Ctrl+Shift+T'],
+    ['保存 / 另存为', 'Ctrl+S / Ctrl+Shift+S'],
+    ['关闭 / 切换文档', 'Ctrl+W / Ctrl+Tab'],
+    ['查找 / 替换', 'Ctrl+F / Ctrl+H'],
+    ['查找下一个 / 上一个', 'F3 / Shift+F3'],
+    ['一级~六级标题 / 正文', 'Ctrl+1~6 / Ctrl+0'],
+    ['提升 / 降低标题', 'Ctrl+= / Ctrl+-'],
+    ['表格 / 代码块 / 数学块', 'Ctrl+T / Ctrl+Shift+K / Ctrl+Shift+M'],
+    ['引用 / 有序 / 无序 / 任务列表', 'Ctrl+Shift+Q / Ctrl+Shift+[ / Ctrl+Shift+]'],
+    ['加粗 / 斜体 / 行内代码', 'Ctrl+B / Ctrl+I / Ctrl+Shift+`'],
+    ['删除线 / 超链接 / 图像', 'Alt+Shift+5 / Ctrl+K / Ctrl+Shift+I'],
+    ['清除格式', 'Ctrl+\\'],
+    ['侧边栏 / 大纲', 'Ctrl+Shift+L / Ctrl+Shift+1'],
+    ['专注模式 / 打字机模式', 'F8 / F9'],
+    ['放大 / 缩小 / 实际大小', 'Ctrl+Shift+= / Ctrl+Shift+- / Ctrl+Shift+0'],
     ['导出 PDF', 'Ctrl+Shift+E'],
-    ['文件树侧栏', 'Ctrl+\\'],
-    ['大纲面板', 'Ctrl+Shift+\\'],
-    ['专注模式', 'F8'],
-    ['打字机模式', 'F9'],
-    ['深色模式', 'Ctrl+Shift+D'],
-    ['放大 / 缩小 / 重置', 'Ctrl+= / Ctrl+- / Ctrl+0'],
   ]
   const mask = document.createElement('div')
   mask.className = 'modal-mask'
@@ -945,6 +1146,9 @@ window.__im = {
   newDoc,
   activateTab,
   closeTab,
+  applyHeading,
+  doAction,
+  replaceAll,
   setDark,
   setFocus,
   setTypewriter,

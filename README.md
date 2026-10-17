@@ -12,7 +12,10 @@
 - 最近文件：菜单与欢迎页双入口
 - 导出：PDF（A4 排版）与自包含单文件 HTML（内嵌样式与公式字体）
 - 明暗主题、专注模式（F8）、打字机模式（F9）
-- 状态栏字数统计、Ctrl+F 查找、拖拽 .md 文件进窗口打开
+- Typora 式六组菜单：文件／编辑／段落／格式／视图／帮助，含全套 Typora 快捷键
+- 查找与替换（Ctrl+F / Ctrl+H，支持全部替换）
+- 多窗口（Ctrl+Shift+N 新建窗口）、重新打开关闭的文件（Ctrl+Shift+T）
+- 状态栏字数统计、拖拽 .md 文件进窗口打开
 
 ## 运行
 
@@ -33,20 +36,23 @@ set ELECTRON_MIRROR=https://cdn.npmmirror.com/binaries/electron/&& npm install -
 
 | 操作 | 快捷键 |
 | --- | --- |
-| 新建文档 | Ctrl+N |
-| 打开文件 | Ctrl+O |
-| 打开文件夹 | Ctrl+Shift+O |
-| 保存 | Ctrl+S |
-| 另存为 | Ctrl+Shift+S |
-| 关闭标签页 | Ctrl+W |
-| 切换标签页 | Ctrl+Tab |
-| 查找 | Ctrl+F |
+| 新建 / 新建窗口 | Ctrl+N / Ctrl+Shift+N |
+| 打开 / 重新打开关闭的文件 | Ctrl+O / Ctrl+Shift+T |
+| 保存 / 另存为 | Ctrl+S / Ctrl+Shift+S |
+| 关闭 / 切换文档 | Ctrl+W / Ctrl+Tab |
+| 查找 / 替换 | Ctrl+F / Ctrl+H |
+| 查找下一个 / 上一个 | F3 / Shift+F3 |
+| 一级~六级标题 / 正文 | Ctrl+1~6 / Ctrl+0 |
+| 提升 / 降低标题 | Ctrl+= / Ctrl+- |
+| 表格 / 代码块 / 数学块 | Ctrl+T / Ctrl+Shift+K / Ctrl+Shift+M |
+| 引用 / 有序 / 无序 / 任务列表 | Ctrl+Shift+Q / Ctrl+Shift+[ / Ctrl+Shift+] |
+| 加粗 / 斜体 / 行内代码 | Ctrl+B / Ctrl+I / Ctrl+Shift+\` |
+| 删除线 / 超链接 / 图像 | Alt+Shift+5 / Ctrl+K / Ctrl+Shift+I |
+| 清除格式 | Ctrl+\\ |
+| 侧边栏 / 大纲 | Ctrl+Shift+L / Ctrl+Shift+1 |
+| 专注模式 / 打字机模式 | F8 / F9 |
+| 放大 / 缩小 / 实际大小 | Ctrl+Shift+= / Ctrl+Shift+- / Ctrl+Shift+0 |
 | 导出 PDF | Ctrl+Shift+E |
-| 文件树侧栏 | Ctrl+\ |
-| 大纲面板 | Ctrl+Shift+\ |
-| 专注模式 | F8 |
-| 打字机模式 | F9 |
-| 深色模式 | Ctrl+Shift+D |
 
 ## 技术
 

@@ -51,10 +51,17 @@
     </main>
   </div>
   <div id="findbar" hidden>
-    <input id="find-input" type="text" placeholder="查找内容…" />
-    <button id="find-prev" class="icon-btn" title="上一个（Shift+Enter）">↑</button>
-    <button id="find-next" class="icon-btn" title="下一个（Enter）">↓</button>
-    <button id="find-close" class="icon-btn" title="关闭（Esc）">✕</button>
+    <div class="find-row">
+      <input id="find-input" type="text" placeholder="查找内容…" />
+      <button id="find-prev" class="icon-btn" title="上一个（Shift+F3）">↑</button>
+      <button id="find-next" class="icon-btn" title="下一个（F3）">↓</button>
+      <button id="find-close" class="icon-btn" title="关闭（Esc）">✕</button>
+    </div>
+    <div class="find-row find-replace-row">
+      <input id="replace-input" type="text" placeholder="替换为…" />
+      <button id="replace-one" class="find-btn">替换</button>
+      <button id="replace-all" class="find-btn">全部替换</button>
+    </div>
   </div>
   <div id="toast" hidden></div>
   <script src="../node_modules/vditor/dist/index.js"></script>

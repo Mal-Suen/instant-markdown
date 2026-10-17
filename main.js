@@ -3,7 +3,6 @@ const path = require('path')
 const fs = require('fs')
 
 let win = null
-let closedFlushed = false
 let viewState = { sidebar: true, outline: true, focus: false, typewriter: false, dark: false }
 
 const args = parseArgv(process.argv)
@@ -43,7 +42,16 @@ function saveRecentList(list) {
 }
 
 function send(cmd, arg) {
-  if (win && !win.isDestroyed()) win.webContents.send('menu-event', cmd, arg)
+  const target = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+  if (target && !target.isDestroyed()) target.webContents.send('menu-event', cmd, arg)
+}
+
+function winFor(e) {
+  if (e && e.sender) {
+    const w = BrowserWindow.fromWebContents(e.sender)
+    if (w) return w
+  }
+  return BrowserWindow.getFocusedWindow() || win
 }
 
 function buildMenu() {
@@ -76,25 +84,31 @@ function buildMenu() {
       label: '文件',
       submenu: [
         { label: '新建', accelerator: 'CmdOrCtrl+N', click: () => send('new') },
+        { label: '新建窗口', accelerator: 'CmdOrCtrl+Shift+N', click: () => createWindow() },
         { label: '打开…', accelerator: 'CmdOrCtrl+O', click: () => send('open') },
-        { label: '打开文件夹…', accelerator: 'CmdOrCtrl+Shift+O', click: () => send('open-dir') },
+        { label: '打开文件夹…', click: () => send('open-dir') },
+        { label: '重新打开关闭的文件', accelerator: 'CmdOrCtrl+Shift+T', click: () => send('reopen-closed') },
+        { label: '最近使用', submenu: recentSub },
         { type: 'separator' },
         { label: '保存', accelerator: 'CmdOrCtrl+S', click: () => send('save') },
         { label: '另存为…', accelerator: 'CmdOrCtrl+Shift+S', click: () => send('save-as') },
         { type: 'separator' },
-        { label: '导出 PDF…', accelerator: 'CmdOrCtrl+Shift+E', click: () => send('export-pdf') },
-        { label: '导出 HTML…', click: () => send('export-html') },
+        {
+          label: '导出',
+          submenu: [
+            { label: 'PDF…', accelerator: 'CmdOrCtrl+Shift+E', click: () => send('export-pdf') },
+            { label: 'HTML…', click: () => send('export-html') },
+          ],
+        },
         { type: 'separator' },
-        { label: '最近打开', submenu: recentSub },
-        { type: 'separator' },
-        { role: 'quit', label: '退出' },
+        { label: '关闭', accelerator: 'CmdOrCtrl+W', click: () => send('close-tab') },
       ],
     },
     {
       label: '编辑',
       submenu: [
         { role: 'undo', label: '撤销' },
-        { role: 'redo', label: '重做' },
+        { role: 'redo', label: '重做', accelerator: 'CmdOrCtrl+Y' },
         { type: 'separator' },
         { role: 'cut', label: '剪切' },
         { role: 'copy', label: '复制' },
@@ -102,24 +116,71 @@ function buildMenu() {
         { role: 'selectAll', label: '全选' },
         { type: 'separator' },
         { label: '查找…', accelerator: 'CmdOrCtrl+F', click: () => send('find') },
+        { label: '替换…', accelerator: 'CmdOrCtrl+H', click: () => send('replace') },
+        { label: '查找下一个', accelerator: 'F3', click: () => send('find-next') },
+        { label: '查找上一个', accelerator: 'Shift+F3', click: () => send('find-prev') },
+      ],
+    },
+    {
+      label: '段落',
+      submenu: [
+        { label: '一级标题', accelerator: 'CmdOrCtrl+1', click: () => send('heading', 1) },
+        { label: '二级标题', accelerator: 'CmdOrCtrl+2', click: () => send('heading', 2) },
+        { label: '三级标题', accelerator: 'CmdOrCtrl+3', click: () => send('heading', 3) },
+        { label: '四级标题', accelerator: 'CmdOrCtrl+4', click: () => send('heading', 4) },
+        { label: '五级标题', accelerator: 'CmdOrCtrl+5', click: () => send('heading', 5) },
+        { label: '六级标题', accelerator: 'CmdOrCtrl+6', click: () => send('heading', 6) },
+        { label: '正文', accelerator: 'CmdOrCtrl+0', click: () => send('heading', 0) },
+        { type: 'separator' },
+        { label: '提升标题', accelerator: 'CmdOrCtrl+=', click: () => send('heading', 'up') },
+        { label: '降低标题', accelerator: 'CmdOrCtrl+-', click: () => send('heading', 'down') },
+        { type: 'separator' },
+        { label: '表格', accelerator: 'CmdOrCtrl+T', click: () => send('act', 'table') },
+        { label: '代码块', accelerator: 'CmdOrCtrl+Shift+K', click: () => send('act', 'code') },
+        { label: '数学块', accelerator: 'CmdOrCtrl+Shift+M', click: () => send('act', 'math') },
+        { label: '引用', accelerator: 'CmdOrCtrl+Shift+Q', click: () => send('act', 'quote') },
+        { type: 'separator' },
+        { label: '有序列表', accelerator: 'CmdOrCtrl+Shift+[', click: () => send('act', 'ordered-list') },
+        { label: '无序列表', accelerator: 'CmdOrCtrl+Shift+]', click: () => send('act', 'list') },
+        { label: '任务列表', click: () => send('act', 'check') },
+        { label: '水平分割线', click: () => send('act', 'line') },
+        { type: 'separator' },
+        { label: '缩进', accelerator: 'CmdOrCtrl+]', click: () => send('act', 'indent') },
+        { label: '减少缩进', accelerator: 'CmdOrCtrl+[', click: () => send('act', 'outdent') },
+      ],
+    },
+    {
+      label: '格式',
+      submenu: [
+        { label: '加粗', accelerator: 'CmdOrCtrl+B', click: () => send('act', 'bold') },
+        { label: '斜体', accelerator: 'CmdOrCtrl+I', click: () => send('act', 'italic') },
+        { label: '代码', accelerator: 'CmdOrCtrl+Shift+`', click: () => send('act', 'inline-code') },
+        { label: '删除线', accelerator: 'Alt+Shift+5', click: () => send('act', 'strike') },
+        { type: 'separator' },
+        { label: '超链接', accelerator: 'CmdOrCtrl+K', click: () => send('act', 'link') },
+        { label: '图像', accelerator: 'CmdOrCtrl+Shift+I', click: () => send('act', 'image') },
+        { type: 'separator' },
+        { label: '清除格式', accelerator: 'CmdOrCtrl+\\', click: () => send('act', 'clear-format') },
       ],
     },
     {
       label: '视图',
       submenu: [
-        { label: '文件树侧栏', type: 'checkbox', checked: viewState.sidebar, accelerator: 'CmdOrCtrl+\\', click: () => send('toggle-sidebar') },
-        { label: '大纲面板', type: 'checkbox', checked: viewState.outline, accelerator: 'CmdOrCtrl+Shift+\\', click: () => send('toggle-outline') },
+        { label: '侧边栏', type: 'checkbox', checked: viewState.sidebar, accelerator: 'CmdOrCtrl+Shift+L', click: () => send('toggle-sidebar') },
+        { label: '大纲', type: 'checkbox', checked: viewState.outline, accelerator: 'CmdOrCtrl+Shift+1', click: () => send('toggle-outline') },
         { type: 'separator' },
         { label: '专注模式', type: 'checkbox', checked: viewState.focus, accelerator: 'F8', click: () => send('toggle-focus') },
         { label: '打字机模式', type: 'checkbox', checked: viewState.typewriter, accelerator: 'F9', click: () => send('toggle-typewriter') },
         { label: '深色模式', type: 'checkbox', checked: viewState.dark, accelerator: 'CmdOrCtrl+Shift+D', click: () => send('toggle-dark') },
         { type: 'separator' },
-        { role: 'zoomIn', label: '放大' },
-        { role: 'zoomOut', label: '缩小' },
-        { role: 'resetZoom', label: '重置缩放' },
+        { label: '切换文档', click: () => send('cycle-tab') },
         { type: 'separator' },
-        { role: 'toggleDevTools', label: '开发者工具' },
+        { role: 'zoomIn', label: '放大', accelerator: 'CmdOrCtrl+Shift+=' },
+        { role: 'zoomOut', label: '缩小', accelerator: 'CmdOrCtrl+Shift+-' },
+        { role: 'resetZoom', label: '实际大小', accelerator: 'CmdOrCtrl+Shift+0' },
+        { type: 'separator' },
         { role: 'togglefullscreen', label: '全屏' },
+        { role: 'toggleDevTools', label: '开发者工具', accelerator: 'Shift+F12' },
       ],
     },
     {
@@ -142,7 +203,7 @@ function showAbout() {
   })
 }
 
-function createWindow() {
+function createWindow(isPrimary) {
   win = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -168,24 +229,27 @@ function createWindow() {
     return { action: 'deny' }
   })
   win.on('close', (e) => {
-    if (closedFlushed) return
+    if (win.__flushed) return
     e.preventDefault()
     Promise.resolve(
       win.webContents.executeJavaScript('window.__imFlush ? window.__imFlush() : Promise.resolve()')
     )
       .catch(() => {})
       .then(() => {
-        closedFlushed = true
+        win.__flushed = true
         win.close()
       })
   })
+  const thisWin = win
   win.on('closed', () => {
-    win = null
+    if (win === thisWin) win = null
   })
-  win.webContents.once('did-finish-load', () => {
-    if (args.file) win.webContents.send('open-file', path.resolve(args.file))
-    if (args.shot) runCapture(args)
-  })
+  if (isPrimary) {
+    win.webContents.once('did-finish-load', () => {
+      if (args.file) win.webContents.send('open-file', path.resolve(args.file))
+      if (args.shot) runCapture(args)
+    })
+  }
 }
 
 async function runCapture(a) {
@@ -254,21 +318,21 @@ function decodeFileText(buf) {
 }
 
 function registerIpc() {
-  ipcMain.handle('dialog:open-file', async () => {
-    const r = await dialog.showOpenDialog(win, {
+  ipcMain.handle('dialog:open-file', async (e) => {
+    const r = await dialog.showOpenDialog(winFor(e), {
       filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'txt'] }],
       properties: ['openFile'],
     })
     return r.canceled ? null : r.filePaths[0]
   })
 
-  ipcMain.handle('dialog:open-dir', async () => {
-    const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] })
+  ipcMain.handle('dialog:open-dir', async (e) => {
+    const r = await dialog.showOpenDialog(winFor(e), { properties: ['openDirectory'] })
     return r.canceled ? null : r.filePaths[0]
   })
 
   ipcMain.handle('dialog:save-file', async (e, defaultName, content) => {
-    const r = await dialog.showSaveDialog(win, {
+    const r = await dialog.showSaveDialog(winFor(e), {
       defaultPath: defaultName,
       filters: [{ name: 'Markdown', extensions: ['md'] }],
     })
@@ -338,7 +402,7 @@ function registerIpc() {
   })
 
   ipcMain.handle('export:pdf', async (e, title, html) => {
-    const r = await dialog.showSaveDialog(win, {
+    const r = await dialog.showSaveDialog(winFor(e), {
       defaultPath: (title || '未命名') + '.pdf',
       filters: [{ name: 'PDF', extensions: ['pdf'] }],
     })
@@ -365,7 +429,7 @@ function registerIpc() {
   })
 
   ipcMain.handle('export:html', async (e, defaultName, html) => {
-    const r = await dialog.showSaveDialog(win, {
+    const r = await dialog.showSaveDialog(winFor(e), {
       defaultPath: defaultName,
       filters: [{ name: 'HTML', extensions: ['html'] }],
     })
@@ -399,7 +463,7 @@ if (!gotLock) {
   app.whenReady().then(() => {
     buildMenu()
     registerIpc()
-    createWindow()
+    createWindow(true)
     app.on('activate', () => {
       if (!BrowserWindow.getAllWindows().length) createWindow()
     })
