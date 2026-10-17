@@ -231,16 +231,12 @@ function createWindow(isPrimary) {
     return { action: 'deny' }
   })
   win.on('close', (e) => {
-    if (win.__flushed) return
+    if (win.__closeConfirmed || args.shot) return
     e.preventDefault()
-    Promise.resolve(
-      win.webContents.executeJavaScript('window.__imFlush ? window.__imFlush() : Promise.resolve()')
-    )
-      .catch(() => {})
-      .then(() => {
-        win.__flushed = true
-        win.close()
-      })
+    if (!win.__closePending) {
+      win.__closePending = true
+      win.webContents.send('confirm-close')
+    }
   })
   const thisWin = win
   win.on('closed', () => {
@@ -489,6 +485,28 @@ function registerIpc() {
   ipcMain.on('view-state', (e, s) => {
     viewState = { ...viewState, ...s }
     buildMenu()
+  })
+
+  ipcMain.handle('confirm-unsaved', async (e, message) => {
+    const r = await dialog.showMessageBox(winFor(e), {
+      type: 'question',
+      message: message || '有未保存的修改。',
+      buttons: ['保存', '不保存', '取消'],
+      defaultId: 0,
+      cancelId: 2,
+    })
+    return ['save', 'discard', 'cancel'][r.response]
+  })
+
+  ipcMain.on('close-reply', (e, action) => {
+    const w = BrowserWindow.fromWebContents(e.sender)
+    if (!w) return
+    if (action === 'close') {
+      w.__closeConfirmed = true
+      w.close()
+    } else {
+      w.__closePending = false
+    }
   })
 }
 

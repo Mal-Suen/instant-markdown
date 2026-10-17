@@ -22,5 +22,8 @@ contextBridge.exposeInMainWorld('api', {
   },
   onMenuEvent: (cb) => ipcRenderer.on('menu-event', (e, cmd, arg) => cb(cmd, arg)),
   onOpenFile: (cb) => ipcRenderer.on('open-file', (e, p) => cb(p)),
+  onConfirmClose: (cb) => ipcRenderer.on('confirm-close', () => cb()),
+  confirmUnsaved: (message) => ipcRenderer.invoke('confirm-unsaved', message),
+  closeReply: (action) => ipcRenderer.send('close-reply', action),
   syncViewState: (s) => ipcRenderer.send('view-state', s),
 })

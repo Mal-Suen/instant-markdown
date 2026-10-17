@@ -177,7 +177,6 @@ function onEditorInput(tab, value) {
     renderTabbar()
   }
   updateStatus(value)
-  scheduleAutosave(tab)
   clearTimeout(tab._outlineTimer)
   tab._outlineTimer = setTimeout(renderOutlinePanel, 500)
 }
@@ -221,7 +220,6 @@ async function openPath(filePath) {
 function activateTab(id) {
   const tab = state.tabs.find((t) => t.id === id)
   if (!tab) return
-  flushPendingSave()
   state.activeId = id
   if (!tab.vditor) {
     createEditorForTab(tab)
@@ -246,13 +244,13 @@ function activateTab(id) {
 async function closeTab(id) {
   const tab = state.tabs.find((t) => t.id === id)
   if (!tab) return
-  if (tab._saveTimer) {
-    clearTimeout(tab._saveTimer)
-    tab._saveTimer = null
-    await saveTab(tab, true)
-  }
-  if (tab.dirty && !tab.path) {
-    if (!window.confirm('「' + tab.name + '」尚未保存，关闭后将丢失。确定关闭吗？')) return
+  if (tab.dirty) {
+    const choice = await confirmUnsaved('「' + tab.name + '」有未保存的修改。')
+    if (choice === 'cancel') return
+    if (choice === 'save') {
+      await saveTab(tab, false)
+      if (tab.dirty) return
+    }
   }
   if (tab.vditor) {
     try {
@@ -329,23 +327,6 @@ function renderTabbar() {
 
 function suggestName(tab) {
   return /\.md$/i.test(tab.name) ? tab.name : tab.name + '.md'
-}
-
-function scheduleAutosave(tab) {
-  clearTimeout(tab._saveTimer)
-  tab._saveTimer = setTimeout(() => {
-    tab._saveTimer = null
-    saveTab(tab, true)
-  }, 800)
-}
-
-async function flushPendingSave() {
-  const pending = state.tabs.filter((t) => t._saveTimer)
-  for (const t of pending) {
-    clearTimeout(t._saveTimer)
-    t._saveTimer = null
-  }
-  await Promise.all(pending.map((t) => saveTab(t, true)))
 }
 
 async function saveTab(tab, silent) {
@@ -773,6 +754,34 @@ function reopenClosed() {
   else toast('没有已关闭的文件')
 }
 
+function confirmUnsaved(message) {
+  return api.confirmUnsaved(message)
+}
+
+async function handleConfirmClose() {
+  const dirty = state.tabs.filter((t) => t.dirty)
+  if (!dirty.length) {
+    api.closeReply('close')
+    return
+  }
+  const msg = dirty.length === 1 ? '「' + dirty[0].name + '」有未保存的修改。' : '有 ' + dirty.length + ' 个文档未保存。'
+  const choice = await confirmUnsaved(msg)
+  if (choice === 'cancel') {
+    api.closeReply('cancel')
+    return
+  }
+  if (choice === 'save') {
+    for (const t of dirty) {
+      await saveTab(t, false)
+      if (t.dirty) {
+        api.closeReply('cancel')
+        return
+      }
+    }
+  }
+  api.closeReply('close')
+}
+
 // ---------- 专注模式 ----------
 
 function currentBlock() {
@@ -1117,6 +1126,7 @@ function bindStaticEvents() {
   api.onOpenFile((p) => {
     if (p) openPath(p)
   })
+  api.onConfirmClose(handleConfirmClose)
 }
 
 // ---------- 弹层 ----------
@@ -1189,8 +1199,6 @@ async function init() {
 init()
 
 // ---------- 关闭前落盘与测试钩子 ----------
-
-window.__imFlush = () => flushPendingSave()
 
 window.__im = {
   openPath,
