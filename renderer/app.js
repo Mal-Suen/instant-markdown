@@ -152,6 +152,18 @@ function vditorOptions(tab, content) {
           tab._outlineTimer = setTimeout(renderOutlinePanel, 500)
         })
       }
+      const resetEl = tab.host ? tab.host.querySelector('.vditor-ir .vditor-reset') : null
+      if (resetEl && !tab._moAttached) {
+        tab._moAttached = true
+        tab._mo = new MutationObserver(() => {
+          if (tab._initializing) return
+          if (!tab.dirty) {
+            tab.dirty = true
+            renderTabbar()
+          }
+        })
+        tab._mo.observe(resetEl, { childList: true, subtree: true, characterData: true })
+      }
       if (state.activeId === tab.id) {
         try {
           tab.vditor.focus()
@@ -246,6 +258,11 @@ async function closeTab(id) {
       await saveTab(tab)
       if (tab.dirty) return
     }
+  }
+  if (tab._mo) {
+    try {
+      tab._mo.disconnect()
+    } catch {}
   }
   if (tab.vditor) {
     try {
