@@ -659,9 +659,42 @@ function insertAtCursor(text) {
   document.execCommand('insertText', false, text)
 }
 
+const INLINE_FORMAT_ACTIONS = ['bold', 'italic', 'strike', 'inline-code', 'link']
+
+function isWordChar(ch) {
+  const code = ch.charCodeAt(0)
+  return (code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3400 && code <= 0x4dbf) || (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a) || (code >= 0x30 && code <= 0x39) || ch === '_'
+}
+
+function expandCollapsedSelectionToWord() {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount || !sel.isCollapsed) return false
+  const range = sel.getRangeAt(0)
+  const node = range.startContainer
+  if (node.nodeType !== 3) return false
+  const text = node.data
+  let start = range.startOffset
+  let end = start
+  while (start > 0 && isWordChar(text[start - 1])) start--
+  while (end < text.length && isWordChar(text[end])) end++
+  if (start === end) return false
+  const newRange = document.createRange()
+  newRange.setStart(node, start)
+  newRange.setEnd(node, end)
+  sel.removeAllRanges()
+  sel.addRange(newRange)
+  return true
+}
+
 function doAction(name) {
   const tab = activeTab()
   if (!tab || !tab.ready) return
+  if (INLINE_FORMAT_ACTIONS.indexOf(name) >= 0) {
+    const sel = window.getSelection()
+    if (sel && sel.rangeCount && sel.isCollapsed) {
+      if (!expandCollapsedSelectionToWord()) return
+    }
+  }
   switch (name) {
     case 'bold':
     case 'italic':
