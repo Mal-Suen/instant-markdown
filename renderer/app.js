@@ -660,6 +660,8 @@ function insertAtCursor(text) {
 }
 
 const INLINE_FORMAT_ACTIONS = ['bold', 'italic', 'strike', 'inline-code', 'link']
+const INLINE_COLLAPSE_ACTIONS = ['bold', 'italic', 'strike', 'inline-code']
+const INLINE_NODE_TYPES = { bold: 'strong', italic: 'em', strike: 's', 'inline-code': 'code', link: 'a' }
 
 function isWordChar(ch) {
   const code = ch.charCodeAt(0)
@@ -686,6 +688,35 @@ function expandCollapsedSelectionToWord() {
   return true
 }
 
+function syncInlineToolbarState(tab, name) {
+  if (!tab.host) return
+  const btn = tab.host.querySelector('.vditor-toolbar button[data-type="' + name + '"]')
+  if (!btn) return
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return
+  let node = sel.getRangeAt(0).startContainer
+  if (node.nodeType === 3) node = node.parentNode
+  const inside = node.closest ? node.closest('.vditor-ir__node[data-type="' + INLINE_NODE_TYPES[name] + '"]') : null
+  if (inside) btn.classList.add('vditor-menu--current')
+  else btn.classList.remove('vditor-menu--current')
+}
+
+function collapseFormattedNodeAtCursor() {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return
+  let node = sel.getRangeAt(0).startContainer
+  if (node.nodeType === 3) node = node.parentNode
+  if (!node.closest) return
+  const expanded = node.closest('.vditor-ir__node--expand')
+  if (!expanded) return
+  const range = document.createRange()
+  range.setStartAfter(expanded)
+  range.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(range)
+  expanded.classList.remove('vditor-ir__node--expand')
+}
+
 function doAction(name) {
   const tab = activeTab()
   if (!tab || !tab.ready) return
@@ -694,6 +725,7 @@ function doAction(name) {
     if (sel && sel.rangeCount && sel.isCollapsed) {
       if (!expandCollapsedSelectionToWord()) return
     }
+    syncInlineToolbarState(tab, name)
   }
   switch (name) {
     case 'bold':
@@ -710,7 +742,7 @@ function doAction(name) {
     case 'table':
     case 'indent':
     case 'outdent':
-      triggerToolbar(name)
+      if (triggerToolbar(name) && INLINE_COLLAPSE_ACTIONS.indexOf(name) >= 0) collapseFormattedNodeAtCursor()
       break
     case 'math':
       insertAtCursor('$$\n\n$$')
