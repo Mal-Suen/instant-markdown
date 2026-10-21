@@ -110,7 +110,9 @@ function updateDocumentBase(tab) {
     const dir = pathDirname(tab.path).replace(/\\/g, '/')
     if (dir) {
       try {
-        href = new URL('file:///' + dir + '/').href
+        // 按段编码：目录名中的 #/? 会被 URL 解析为 fragment/query，导致 base 指向错误目录
+        const enc = dir.split('/').map((seg, i) => (i === 0 ? seg : encodeURIComponent(seg))).join('/')
+        href = new URL('file:///' + enc + '/').href
       } catch {}
     }
   }
@@ -714,11 +716,20 @@ function placeCursorInImageUrl() {
   if (!reset) return false
   let imgNode = node.closest('.vditor-ir__node[data-type="img"]')
   if (!imgNode) {
+    // 取离光标最近的空 src 图片节点：刚插入的图片紧邻光标之前，
+    // 不能取文档中第一张未填 URL 的旧图片
     const candidates = reset.querySelectorAll('.vditor-ir__node[data-type="img"]')
+    let firstAfter = null
     for (const c of candidates) {
       const im = c.querySelector('img')
-      if (im && !im.getAttribute('src')) { imgNode = c; break }
+      if (!im || im.getAttribute('src')) continue
+      if (node.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING) {
+        if (!firstAfter) firstAfter = c
+      } else {
+        imgNode = c
+      }
     }
+    if (!imgNode) imgNode = firstAfter
   }
   if (!imgNode) return false
   const markers = imgNode.querySelectorAll('.vditor-ir__marker')
@@ -738,7 +749,7 @@ const INLINE_NODE_TYPES = { bold: 'strong', italic: 'em', strike: 's', 'inline-c
 
 function isWordChar(ch) {
   const code = ch.charCodeAt(0)
-  return (code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3400 && code <= 0x4dbf) || (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a) || (code >= 0x30 && code <= 0x39) || ch === '_'
+  return (code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3400 && code <= 0x4dbf) || (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a) || (code >= 0x30 && code <= 0x39) || ch === '_' || (code >= 0x3040 && code <= 0x30ff) || (code >= 0x3130 && code <= 0x318f) || (code >= 0xac00 && code <= 0xd7af)
 }
 
 function expandCollapsedSelectionToWord() {
@@ -810,6 +821,7 @@ function doAction(name) {
   const tab = activeTab()
   if (!tab || !tab.ready) return
   if (INLINE_FORMAT_ACTIONS.indexOf(name) >= 0) {
+    if (!selectionInEditor()) return
     const sel = window.getSelection()
     if (sel && sel.rangeCount && sel.isCollapsed) {
       if (!expandCollapsedSelectionToWord()) return
