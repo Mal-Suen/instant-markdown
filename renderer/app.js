@@ -719,15 +719,16 @@ function placeCursorInImageUrl() {
     // 取离光标最近的空 src 图片节点：刚插入的图片紧邻光标之前，
     // 不能取文档中第一张未填 URL 的旧图片
     const candidates = reset.querySelectorAll('.vditor-ir__node[data-type="img"]')
+    const cursor = sel.getRangeAt(0)
     let firstAfter = null
     for (const c of candidates) {
       const im = c.querySelector('img')
       if (!im || im.getAttribute('src')) continue
-      if (node.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING) {
-        if (!firstAfter) firstAfter = c
-      } else {
-        imgNode = c
-      }
+      // comparePoint 按光标实际边界判定候选先后；不能用 compareDocumentPosition 对光标
+      // 父元素比较——子节点候选恒返回 CONTAINED_BY|FOLLOWING，全部误入「光标之后」分支
+      let after = false
+      try { after = cursor.comparePoint(c, 0) > 0 } catch {}
+      if (after) { if (!firstAfter) firstAfter = c } else { imgNode = c }
     }
     if (!imgNode) imgNode = firstAfter
   }
@@ -820,8 +821,8 @@ function clearStaleToolbarDisabled(tab, name) {
 function doAction(name) {
   const tab = activeTab()
   if (!tab || !tab.ready) return
+  if (!selectionInEditor()) return
   if (INLINE_FORMAT_ACTIONS.indexOf(name) >= 0) {
-    if (!selectionInEditor()) return
     const sel = window.getSelection()
     if (sel && sel.rangeCount && sel.isCollapsed) {
       if (!expandCollapsedSelectionToWord()) return
