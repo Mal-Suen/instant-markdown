@@ -96,10 +96,31 @@ function syncViewState() {
 
 // ---------- 编辑器 ----------
 
+const ABS_CDN = new URL('../node_modules/vditor', location.href).href
+const ABS_CONTENT_THEME = new URL('../node_modules/vditor/dist/css/content-theme', location.href).href
+
+function updateDocumentBase(tab) {
+  let base = document.querySelector('base')
+  if (!base) {
+    base = document.createElement('base')
+    document.head.appendChild(base)
+  }
+  let href = ''
+  if (tab && tab.path) {
+    const dir = pathDirname(tab.path).replace(/\\/g, '/')
+    if (dir) {
+      try {
+        href = new URL('file:///' + dir + '/').href
+      } catch {}
+    }
+  }
+  base.href = href || new URL('.', location.href).href
+}
+
 function vditorOptions(tab, content) {
   const dark = state.settings.dark
   return {
-    cdn: '../node_modules/vditor',
+    cdn: ABS_CDN,
     mode: 'ir',
     lang: 'zh_CN',
     theme: dark ? 'dark' : 'classic',
@@ -133,7 +154,7 @@ function vditorOptions(tab, content) {
             state.settings.dark ? 'dark' : 'classic',
             state.settings.dark ? 'dark' : 'light',
             state.settings.dark ? 'vs2015' : 'github',
-            '../node_modules/vditor/dist/css/content-theme'
+            ABS_CONTENT_THEME
           )
         } catch {}
       }
@@ -155,8 +176,17 @@ function vditorOptions(tab, content) {
       const resetEl = tab.host ? tab.host.querySelector('.vditor-ir .vditor-reset') : null
       if (resetEl && !tab._moAttached) {
         tab._moAttached = true
-        tab._mo = new MutationObserver(() => {
+        tab._mo = new MutationObserver((muts) => {
           if (tab._initializing) return
+          // Vditor 撤销栈快照（undoDelay 800ms 延迟触发）会向编辑区插入/移除 span.vditor-wbr
+          // 光标标记；该内部变更不是用户编辑，据此标脏会让「打字后立即保存」的标签假性变脏
+          const onlyCaret = muts.every((m) => {
+            if (m.type === 'characterData') return true
+            if (m.type !== 'childList') return false
+            const nodesOk = (nodes) => Array.from(nodes).every((n) => n.nodeType === 3 || (n.nodeType === 1 && n.classList && n.classList.contains('vditor-wbr')))
+            return nodesOk(m.addedNodes) && nodesOk(m.removedNodes)
+          })
+          if (onlyCaret) return
           if (!tab.dirty) {
             tab.dirty = true
             renderTabbar()
@@ -228,6 +258,7 @@ function activateTab(id) {
   const tab = state.tabs.find((t) => t.id === id)
   if (!tab) return
   state.activeId = id
+  updateDocumentBase(tab)
   if (!tab.vditor) {
     createEditorForTab(tab)
   } else {
@@ -659,6 +690,48 @@ function insertAtCursor(text) {
   document.execCommand('insertText', false, text)
 }
 
+function moveCursorBack(n) {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount || !sel.isCollapsed) return
+  const node = sel.getRangeAt(0).startContainer
+  if (node.nodeType !== 3) return
+  const off = sel.getRangeAt(0).startOffset
+  if (off < n) return
+  const range = document.createRange()
+  range.setStart(node, off - n)
+  range.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(range)
+}
+
+function placeCursorInImageUrl() {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return false
+  let node = sel.getRangeAt(0).startContainer
+  if (node.nodeType === 3) node = node.parentNode
+  if (!node || !node.closest) return false
+  const reset = node.closest('.vditor-reset')
+  if (!reset) return false
+  let imgNode = node.closest('.vditor-ir__node[data-type="img"]')
+  if (!imgNode) {
+    const candidates = reset.querySelectorAll('.vditor-ir__node[data-type="img"]')
+    for (const c of candidates) {
+      const im = c.querySelector('img')
+      if (im && !im.getAttribute('src')) { imgNode = c; break }
+    }
+  }
+  if (!imgNode) return false
+  const markers = imgNode.querySelectorAll('.vditor-ir__marker')
+  const last = markers.length ? markers[markers.length - 1] : null
+  if (!last) return false
+  const range = document.createRange()
+  range.setStartBefore(last)
+  range.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(range)
+  return true
+}
+
 const INLINE_FORMAT_ACTIONS = ['bold', 'italic', 'strike', 'inline-code', 'link']
 const INLINE_COLLAPSE_ACTIONS = ['bold', 'italic', 'strike', 'inline-code']
 const INLINE_NODE_TYPES = { bold: 'strong', italic: 'em', strike: 's', 'inline-code': 'code', link: 'a' }
@@ -717,6 +790,22 @@ function collapseFormattedNodeAtCursor() {
   expanded.classList.remove('vditor-ir__node--expand')
 }
 
+function clearStaleToolbarDisabled(tab, name) {
+  if (!tab.host) return
+  const btn = tab.host.querySelector('.vditor-toolbar button[data-type="' + name + '"]')
+  if (!btn || !btn.classList.contains('vditor-menu--disabled')) return
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return
+  let node = sel.getRangeAt(0).startContainer
+  if (node.nodeType === 3) node = node.parentNode
+  if (!node || !node.closest) return
+  // 与 Vditor highlightToolbarIR 的禁用上下文一致：光标在代码块/行内代码内保持禁用
+  if (node.closest('[data-type="code-block"]') || node.closest('.vditor-ir__node[data-type="code"]')) return
+  // 光标在表格内时保持 Vditor 对这些动作的禁用
+  if (node.closest('[data-type="table"]') && ['headings', 'list', 'ordered-list', 'check', 'line', 'quote', 'code', 'table'].indexOf(name) >= 0) return
+  btn.classList.remove('vditor-menu--disabled')
+}
+
 function doAction(name) {
   const tab = activeTab()
   if (!tab || !tab.ready) return
@@ -727,6 +816,7 @@ function doAction(name) {
     }
     syncInlineToolbarState(tab, name)
   }
+  clearStaleToolbarDisabled(tab, name)
   switch (name) {
     case 'bold':
     case 'italic':
@@ -739,16 +829,28 @@ function doAction(name) {
     case 'quote':
     case 'line':
     case 'code':
-    case 'table':
     case 'indent':
     case 'outdent':
       if (triggerToolbar(name) && INLINE_COLLAPSE_ACTIONS.indexOf(name) >= 0) collapseFormattedNodeAtCursor()
       break
+    case 'table': {
+      const selT = window.getSelection()
+      if (!selT || !selT.rangeCount) break
+      let nodeT = selT.getRangeAt(0).startContainer
+      if (nodeT.nodeType === 3) nodeT = nodeT.parentNode
+      if (!nodeT.closest || !nodeT.closest('.vditor-ir')) break
+      // Vditor IR 的 spin 会把模板中的文本 \n 转成段落分隔（表格行被空行隔开），
+      // <br> 则被原样保留——两者都无法经 spin 解析成表格。直接插入真实 <table> 元素：
+      // 浏览器自动分块，渲染正确，DOM2Md 也能转出正确的表格 markdown
+      document.execCommand('insertHTML', false, '<table><thead><tr><th>col1</th><th>col2</th><th>col3</th></tr></thead><tbody><tr><td> </td><td> </td><td> </td></tr></tbody></table>')
+      break
+    }
     case 'math':
       insertAtCursor('$$\n\n$$')
       break
     case 'image':
       insertAtCursor('![]()')
+      if (!placeCursorInImageUrl()) moveCursorBack(1)
       break
     case 'clear-format':
       clearFormat()
@@ -881,7 +983,7 @@ function setDark(on) {
   state.settings.dark = on
   saveSettings()
   document.body.classList.toggle('theme-dark', on)
-  const contentPath = '../node_modules/vditor/dist/css/content-theme'
+  const contentPath = ABS_CONTENT_THEME
   for (const t of state.tabs) {
     if (t.vditor) {
       try {
@@ -985,7 +1087,7 @@ async function renderMarkdownHtml(md) {
   try {
     const html = await Vditor.md2html(md, {
       mode: dark ? 'dark' : 'light',
-      cdn: '../node_modules/vditor',
+      cdn: ABS_CDN,
       hljs: { enable: true, style: dark ? 'vs2015' : 'github', lineNumber: false },
       math: { engine: 'KaTeX' },
       markdown: { autoSpace: true, toc: false, footnotes: true },
