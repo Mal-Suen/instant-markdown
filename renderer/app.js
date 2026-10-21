@@ -833,6 +833,35 @@ function clearStaleToolbarDisabled(tab, name) {
   btn.classList.remove('vditor-menu--disabled')
 }
 
+function isStarMarkerElement(el) {
+  return !!(el && el.nodeType === 1 && el.classList && el.classList.contains('vditor-ir__marker') && el.textContent.indexOf('*') >= 0)
+}
+
+function inlineMarkerConflict(name) {
+  // Lute 对 ≥3 连排的 * 系标记配对失败（实测：相邻加粗 **** 新加粗不渲染、嵌套 *** 斜体不渲染）——
+  // 检测插入 * 系标记是否会与既有标记连排，是则改走下划线变体插入
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return false
+  const r = sel.getRangeAt(0)
+  let node = r.startContainer
+  if (node.nodeType === 3) node = node.parentNode
+  if (!node || !node.closest) return false
+  const sameType = INLINE_NODE_TYPES[name] ? node.closest('.vditor-ir__node[data-type="' + INLINE_NODE_TYPES[name] + '"]') : null
+  if (sameType) return false
+  if (node.closest('.vditor-ir__node[data-type="strong"], .vditor-ir__node[data-type="em"]')) return true
+  const sn = r.startContainer
+  if (sn.nodeType === 3 && r.startOffset === 0 && sn.previousSibling) {
+    const prev = sn.previousSibling
+    if (isStarMarkerElement(prev) || (prev.nodeType === 1 && prev.lastElementChild && isStarMarkerElement(prev.lastElementChild))) return true
+  }
+  const en = r.endContainer
+  if (en.nodeType === 3 && r.endOffset === en.data.length && en.nextSibling) {
+    const next = en.nextSibling
+    if (isStarMarkerElement(next) || (next.nodeType === 1 && next.firstElementChild && isStarMarkerElement(next.firstElementChild))) return true
+  }
+  return false
+}
+
 function doAction(name) {
   const tab = activeTab()
   if (!tab || !tab.ready) return
@@ -859,6 +888,15 @@ function doAction(name) {
     case 'code':
     case 'indent':
     case 'outdent':
+      if ((name === 'bold' || name === 'italic') && inlineMarkerConflict(name)) {
+        const selC = window.getSelection()
+        const textC = selC && selC.rangeCount ? String(selC) : ''
+        if (textC) {
+          insertAtCursor((name === 'bold' ? '__' : '_') + textC + (name === 'bold' ? '__' : '_'))
+          collapseFormattedNodeAtCursor(name)
+          break
+        }
+      }
       if (triggerToolbar(name) && INLINE_COLLAPSE_ACTIONS.indexOf(name) >= 0) collapseFormattedNodeAtCursor(name)
       break
     case 'table': {
