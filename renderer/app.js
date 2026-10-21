@@ -786,20 +786,35 @@ function syncInlineToolbarState(tab, name) {
   else btn.classList.remove('vditor-menu--current')
 }
 
-function collapseFormattedNodeAtCursor() {
-  const sel = window.getSelection()
-  if (!sel || !sel.rangeCount) return
-  let node = sel.getRangeAt(0).startContainer
-  if (node.nodeType === 3) node = node.parentNode
-  if (!node.closest) return
-  const expanded = node.closest('.vditor-ir__node--expand')
-  if (!expanded) return
-  const range = document.createRange()
-  range.setStartAfter(expanded)
-  range.collapse(true)
-  sel.removeAllRanges()
-  sel.addRange(range)
-  expanded.classList.remove('vditor-ir__node--expand')
+function collapseFormattedNodeAtCursor(name) {
+  const tab = activeTab()
+  const irEl = tab && tab.host ? tab.host.querySelector('.vditor-ir') : null
+  if (!irEl) return
+  // 按动作类型定位刚格式化的展开节点用于光标放置——不依赖光标位置：复杂文本中
+  // Vditor 的光标恢复可能落在节点外（标记配对错位时），按光标找会落空
+  let expanded = null
+  if (name && INLINE_NODE_TYPES[name]) {
+    expanded = irEl.querySelector('.vditor-ir__node--expand[data-type="' + INLINE_NODE_TYPES[name] + '"]')
+  }
+  if (!expanded) {
+    const sel = window.getSelection()
+    if (sel && sel.rangeCount) {
+      let node = sel.getRangeAt(0).startContainer
+      if (node.nodeType === 3) node = node.parentNode
+      if (node && node.closest) expanded = node.closest('.vditor-ir__node--expand')
+    }
+  }
+  if (expanded) {
+    const range = document.createRange()
+    range.setStartAfter(expanded)
+    range.collapse(true)
+    const sel = window.getSelection()
+    sel.removeAllRanges()
+    sel.addRange(range)
+  }
+  // 清除全部展开态：spin 在标记配对错位时会把多个节点标为展开（实测 2 个），
+  // 只清首个会残留——与 Vditor input() 的全局清除行为一致
+  irEl.querySelectorAll('.vditor-ir__node--expand').forEach((n) => n.classList.remove('vditor-ir__node--expand'))
 }
 
 function clearStaleToolbarDisabled(tab, name) {
@@ -844,7 +859,7 @@ function doAction(name) {
     case 'code':
     case 'indent':
     case 'outdent':
-      if (triggerToolbar(name) && INLINE_COLLAPSE_ACTIONS.indexOf(name) >= 0) collapseFormattedNodeAtCursor()
+      if (triggerToolbar(name) && INLINE_COLLAPSE_ACTIONS.indexOf(name) >= 0) collapseFormattedNodeAtCursor(name)
       break
     case 'table': {
       const selT = window.getSelection()
