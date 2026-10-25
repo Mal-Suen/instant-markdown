@@ -2,3 +2,4 @@ node_modules/
 .qwen/
 dist/
 *.log
+dist2/ 
