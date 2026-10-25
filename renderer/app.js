@@ -1353,6 +1353,26 @@ function bindStaticEvents() {
 
   window.addEventListener('keydown', globalKeydown, true)
   document.addEventListener('selectionchange', updateFocusMark)
+  // Typora 式链接点击：普通点击展开为编辑，Ctrl+点击才访问
+  // 捕获阶段先于 Vditor 冒泡处理器运行——普通点击预先加 --expand 使其跳过
+  // 内置的 window.open 分支、落到 expandMarker 放光标；Ctrl+点击则自行外开
+  document.addEventListener('click', (e) => {
+    const t = e.target
+    if (!t || t.nodeType !== 1 || !t.closest || !t.closest('.vditor-ir')) return
+    const node = t.closest('.vditor-ir__node[data-type="a"]')
+    if (!node) return
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault()
+      e.stopPropagation()
+      const markerLink = node.querySelector(':scope > .vditor-ir__marker--link')
+      const anchor = node.querySelector('a[href]')
+      const url = String((markerLink && markerLink.textContent) || (anchor && anchor.getAttribute('href')) || '').trim()
+      if (/^https?:/i.test(url)) window.open(url, '_blank')
+      return
+    }
+    e.preventDefault()
+    if (!node.classList.contains('vditor-ir__node--expand')) node.classList.add('vditor-ir__node--expand')
+  }, true)
   document.addEventListener('dragover', (e) => e.preventDefault())
   document.addEventListener('drop', (e) => {
     e.preventDefault()
