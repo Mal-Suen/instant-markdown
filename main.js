@@ -3,7 +3,7 @@ const path = require('path')
 const fs = require('fs')
 
 let win = null
-let viewState = { sidebar: true, outline: true, focus: false, typewriter: false, dark: false }
+let viewState = { sidebar: true, outline: true, focus: false, typewriter: false, dark: false, codeWrap: true }
 
 const args = parseArgv(process.argv)
 
@@ -179,6 +179,7 @@ function buildMenu() {
         { label: '专注模式', type: 'checkbox', checked: viewState.focus, accelerator: 'F8', click: () => send('toggle-focus') },
         { label: '打字机模式', type: 'checkbox', checked: viewState.typewriter, accelerator: 'F9', click: () => send('toggle-typewriter') },
         { label: '深色模式', type: 'checkbox', checked: viewState.dark, accelerator: 'CmdOrCtrl+Shift+D', click: () => send('toggle-dark') },
+        { label: '代码块自动换行', type: 'checkbox', checked: viewState.codeWrap, click: () => send('toggle-code-wrap') },
         { type: 'separator' },
         { label: '切换文档', click: () => send('cycle-tab') },
         { type: 'separator' },
@@ -186,7 +187,7 @@ function buildMenu() {
         { role: 'zoomOut', label: '缩小', accelerator: 'CmdOrCtrl+Shift+-' },
         { role: 'resetZoom', label: '实际大小', accelerator: 'CmdOrCtrl+Shift+0' },
         { type: 'separator' },
-        { role: 'togglefullscreen', label: '全屏' },
+        { role: 'togglefullscreen', label: '全屏', accelerator: 'F11' },
         { role: 'toggleDevTools', label: '开发者工具', accelerator: 'Shift+F12' },
       ],
     },

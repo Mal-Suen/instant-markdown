@@ -44,7 +44,7 @@ const ICONS = {
 
 // ---------- 状态 ----------
 
-const DEFAULT_SETTINGS = { dark: false, focus: false, typewriter: false, sidebar: true, outline: true }
+const DEFAULT_SETTINGS = { dark: false, focus: false, typewriter: false, sidebar: true, outline: true, codeWrap: true }
 
 const state = {
   tabs: [],
@@ -82,6 +82,7 @@ function applyBodyClasses() {
   document.body.classList.toggle('no-sidebar', !state.settings.sidebar)
   document.body.classList.toggle('no-outline', !state.settings.outline)
   document.body.classList.toggle('focus-mode', state.settings.focus)
+  document.body.classList.toggle('code-wrap', state.settings.codeWrap)
 }
 
 function syncViewState() {
@@ -91,6 +92,7 @@ function syncViewState() {
     focus: state.settings.focus,
     typewriter: state.settings.typewriter,
     dark: state.settings.dark,
+    codeWrap: state.settings.codeWrap,
   })
 }
 
@@ -746,6 +748,33 @@ function placeCursorInImageUrl() {
 
 const INLINE_FORMAT_ACTIONS = ['bold', 'italic', 'strike', 'inline-code', 'link']
 const INLINE_COLLAPSE_ACTIONS = ['bold', 'italic', 'strike', 'inline-code']
+
+function closestBlockElement(node) {
+  let el = node.nodeType === 3 ? node.parentNode : node
+  while (el && el !== document.body) {
+    if (/^(P|H[1-6]|LI|BLOCKQUOTE|TD|TH)$/.test(el.tagName)) return el
+    el = el.parentNode
+  }
+  return null
+}
+
+// 跨块选区会让 Vditor 工具栏 ADD 路径把选区内容拍平成行内（段落分隔被吞、下一段并入当前段），
+// 行内格式动作前把选区截断到起始块末尾
+function clampSelectionToBlock() {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return
+  const range = sel.getRangeAt(0)
+  if (range.collapsed) return
+  const startBlock = closestBlockElement(range.startContainer)
+  const endBlock = closestBlockElement(range.endContainer)
+  if (!startBlock || !endBlock || startBlock === endBlock) return
+  if (startBlock.contains(endBlock) || endBlock.contains(startBlock)) return
+  const clamped = document.createRange()
+  clamped.setStart(range.startContainer, range.startOffset)
+  clamped.setEnd(startBlock, startBlock.childNodes.length)
+  sel.removeAllRanges()
+  sel.addRange(clamped)
+}
 const INLINE_NODE_TYPES = { bold: 'strong', italic: 'em', strike: 's', 'inline-code': 'code', link: 'a' }
 
 function isWordChar(ch) {
@@ -870,6 +899,8 @@ function doAction(name) {
     const sel = window.getSelection()
     if (sel && sel.rangeCount && sel.isCollapsed) {
       if (!expandCollapsedSelectionToWord()) return
+    } else {
+      clampSelectionToBlock()
     }
     syncInlineToolbarState(tab, name)
   }
@@ -966,24 +997,55 @@ function applyHeading(level) {
   }
 }
 
+const CLEARABLE_INLINE_TYPES = ['strong', 'em', 's', 'code', 'a', 'mark', 'tag', 'sub', 'sup', 'kbd']
+
+function rangeIntersectsNode(range, node) {
+  const r2 = document.createRange()
+  r2.selectNodeContents(node)
+  return range.comparePoint(r2.startContainer, r2.startOffset) <= 0 &&
+    range.comparePoint(r2.endContainer, r2.endOffset) >= 0
+}
+
 function clearFormat() {
   const sel = window.getSelection()
   if (!sel || !sel.rangeCount) return
-  let node = sel.getRangeAt(0).startContainer
-  if (node.nodeType === 3) node = node.parentNode
-  if (!node.closest) return
-  const inlineNode = node.closest('.vditor-ir__node')
-  if (!inlineNode) return
-  if (!/^(SPAN|H[1-6])$/.test(inlineNode.tagName)) return
-  const clone = inlineNode.cloneNode(true)
-  clone.querySelectorAll('.vditor-ir__marker').forEach((m) => m.remove())
-  const text = clone.textContent
-  if (!text) return
-  const range = document.createRange()
-  range.selectNodeContents(inlineNode)
-  sel.removeAllRanges()
-  sel.addRange(range)
-  document.execCommand('insertText', false, text)
+  const tab = activeTab()
+  if (!tab || !tab.host) return
+  const root = tab.host.querySelector('.vditor-ir .vditor-reset')
+  if (!root) return
+  const range = sel.getRangeAt(0)
+  let targets = []
+  if (range.collapsed) {
+    let node = range.startContainer
+    if (node.nodeType === 3) node = node.parentNode
+    const inlineNode = node.closest ? node.closest('.vditor-ir__node') : null
+    if (inlineNode && CLEARABLE_INLINE_TYPES.indexOf(inlineNode.getAttribute('data-type')) >= 0) targets = [inlineNode]
+  } else {
+    // 选区可能起于纯文本（旧实现只看 startContainer 会直接无动作）——收集整个选区相交的行内格式节点
+    root.querySelectorAll('.vditor-ir__node').forEach((n) => {
+      if (CLEARABLE_INLINE_TYPES.indexOf(n.getAttribute('data-type')) < 0) return
+      if (rangeIntersectsNode(range, n)) targets.push(n)
+    })
+    targets = targets.filter((n) => !targets.some((m) => m !== n && m.contains(n)))
+  }
+  if (!targets.length) return
+  let anchorText = null
+  for (const node of targets) {
+    const clone = node.cloneNode(true)
+    clone.querySelectorAll('.vditor-ir__marker').forEach((m) => m.remove())
+    const textNode = document.createTextNode(clone.textContent)
+    node.replaceWith(textNode)
+    if (!anchorText) anchorText = textNode
+  }
+  if (anchorText && anchorText.parentNode) {
+    const r = document.createRange()
+    r.setStart(anchorText, 0)
+    r.collapse(true)
+    sel.removeAllRanges()
+    sel.addRange(r)
+  }
+  // DOM 手术不触发原生 input，合成一个让 Vditor 重新解析渲染
+  root.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true }))
 }
 
 function reopenClosed() {
@@ -1101,6 +1163,13 @@ function setSidebar(on) {
   state.settings.sidebar = on
   saveSettings()
   document.body.classList.toggle('no-sidebar', !on)
+  syncViewState()
+}
+
+function setCodeWrap(on) {
+  state.settings.codeWrap = on
+  saveSettings()
+  document.body.classList.toggle('code-wrap', on)
   syncViewState()
 }
 
@@ -1278,6 +1347,9 @@ async function handleMenu(cmd, arg) {
       break
     case 'toggle-dark':
       setDark(!state.settings.dark)
+      break
+    case 'toggle-code-wrap':
+      setCodeWrap(!state.settings.codeWrap)
       break
     case 'recent-open':
       if (arg) openPath(arg)
@@ -1473,6 +1545,7 @@ window.__im = {
   setTypewriter,
   setOutline,
   setSidebar,
+  setCodeWrap,
   exportHtml,
   exportPdf,
   setWorkspace: (p) => {
