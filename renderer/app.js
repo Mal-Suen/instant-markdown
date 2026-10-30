@@ -101,23 +101,34 @@ function syncViewState() {
 const ABS_CDN = new URL('../node_modules/vditor', location.href).href
 const ABS_CONTENT_THEME = new URL('../node_modules/vditor/dist/css/content-theme', location.href).href
 
+// 文档目录 → file:// base URL。按段编码：目录名中的 #/? 会被 URL 解析为 fragment/query；
+// UNC 路径（//server/share）须映射为 file://server/share/ 而非 file:///…
+function dirToBaseUrl(dir) {
+  if (!dir) return ''
+  const d = String(dir).replace(/\\/g, '/')
+  if (!d) return ''
+  try {
+    if (d.startsWith('//')) {
+      const segs = d.split('/').filter(Boolean)
+      if (segs.length < 2) return ''
+      const enc = segs.map((seg, i) => (i < 2 ? seg : encodeURIComponent(seg))).join('/')
+      return new URL('file://' + enc + '/').href
+    }
+    const segs = d.split('/')
+    const enc = segs.map((seg, i) => (i === 0 ? seg : encodeURIComponent(seg))).join('/')
+    return new URL('file:///' + enc + '/').href
+  } catch {
+    return ''
+  }
+}
+
 function updateDocumentBase(tab) {
   let base = document.querySelector('base')
   if (!base) {
     base = document.createElement('base')
     document.head.appendChild(base)
   }
-  let href = ''
-  if (tab && tab.path) {
-    const dir = pathDirname(tab.path).replace(/\\/g, '/')
-    if (dir) {
-      try {
-        // 按段编码：目录名中的 #/? 会被 URL 解析为 fragment/query，导致 base 指向错误目录
-        const enc = dir.split('/').map((seg, i) => (i === 0 ? seg : encodeURIComponent(seg))).join('/')
-        href = new URL('file:///' + enc + '/').href
-      } catch {}
-    }
-  }
+  const href = tab && tab.path ? dirToBaseUrl(pathDirname(tab.path)) : ''
   base.href = href || new URL('.', location.href).href
 }
 
@@ -226,9 +237,17 @@ function createEditorForTab(tab) {
 
 function newDoc() {
   let name = '未命名'
-  const n = state.tabs.filter((t) => !t.path).length
-  if (n > 0) name += ' ' + (n + 1)
-  const tab = { id: ++tabSeq, path: null, name, content: '', dirty: false, vditor: null, host: null }
+  const untitled = state.tabs.filter((t) => !t.path)
+  if (untitled.length) {
+    // 按现存最大编号递增：按数量推算会在关闭中间编号后产生重名
+    let max = 0
+    for (const t of untitled) {
+      const m = /^未命名(?: (\d+))?$/.exec(t.name)
+      if (m) max = Math.max(max, m[1] ? Number(m[1]) : 1)
+    }
+    name = '未命名 ' + (max + 1)
+  }
+  const tab = { id: ++tabSeq, path: null, name, content: '', dirty: false, encoding: 'utf-8', vditor: null, host: null }
   state.tabs.push(tab)
   activateTab(tab.id)
 }
@@ -250,6 +269,7 @@ async function openPath(filePath) {
     name: pathBasename(filePath),
     content: r.content,
     dirty: false,
+    encoding: r.encoding || 'utf-8',
     vditor: null,
     host: null,
   }
@@ -299,10 +319,20 @@ async function closeTab(id) {
       tab._mo.disconnect()
     } catch {}
   }
+  clearTimeout(tab._statusTimer)
+  clearTimeout(tab._outlineTimer)
   if (tab.vditor) {
     try {
       tab.vditor.destroy()
     } catch {}
+    // destroy 会移除 #vditorIconScript 标签；下一个编辑器构造时会以内联脚本方式重载
+    // 图标（被 CSP 拦截，产生一条警告）。图标 SVG 精灵仍在 body 中，补一个空占位标签
+    // 让构造函数的 getElementById 检查跳过内联注入
+    if (!document.getElementById('vditorIconScript')) {
+      const s = document.createElement('script')
+      s.id = 'vditorIconScript'
+      document.head.appendChild(s)
+    }
   }
   if (tab.host) tab.host.remove()
   const idx = state.tabs.findIndex((t) => t.id === id)
@@ -373,7 +403,7 @@ function renderTabbar() {
 // ---------- 保存 ----------
 
 function suggestName(tab) {
-  return /\.md$/i.test(tab.name) ? tab.name : tab.name + '.md'
+  return /\.(md|markdown|txt)$/i.test(tab.name) ? tab.name : tab.name + '.md'
 }
 
 let saveInProgress = false
@@ -393,17 +423,28 @@ async function saveTab(tab) {
     if (!p) return
     tab.path = p
     tab.name = pathBasename(p)
+    tab.encoding = 'utf-8'
     api.recentAdd(p)
     maybeRefreshTree(p)
   } else {
-    const r = await api.writeFile(tab.path, content)
-    if (!r.ok) {
-      toast('保存失败：' + r.error)
-      return
+    saveInProgress = true
+    try {
+      const r = await api.writeFile(tab.path, content, tab.encoding || 'utf-8')
+      if (!r.ok) {
+        toast('保存失败：' + r.error)
+        return
+      }
+      if (r.encoding && r.encoding !== (tab.encoding || 'utf-8')) {
+        tab.encoding = r.encoding
+        toast('原编码无法表示全部字符，已改按 UTF-8 保存')
+      }
+    } finally {
+      saveInProgress = false
     }
   }
   tab.dirty = false
   renderTabbar()
+  updateStatus()
 }
 
 async function saveAs() {
@@ -423,6 +464,7 @@ async function saveAs() {
   if (dup) await closeTab(dup.id)
   tab.path = p
   tab.name = pathBasename(p)
+  tab.encoding = 'utf-8'
   tab.dirty = false
   api.recentAdd(p)
   maybeRefreshTree(p)
@@ -525,6 +567,8 @@ async function updateWelcome() {
   }
   welcome.classList.remove('hidden')
   const list = await api.recentList()
+  // 等待期间若打开了文档，保持隐藏（activateTab 的调用已处理），不要把欢迎页再亮出来
+  if (state.tabs.length > 0) return
   const wrap = $('#w-recent-wrap')
   const box = $('#w-recent')
   box.innerHTML = ''
@@ -559,11 +603,18 @@ function tabValue(tab) {
   }
 }
 
+const ENC_LABELS = { 'utf-8': 'UTF-8', 'utf-8-bom': 'UTF-8 BOM', 'utf-16le': 'UTF-16LE', 'utf-16be': 'UTF-16BE', gbk: 'GBK' }
+
 function updateStatus(value) {
   const tab = activeTab()
   const text = value != null ? value : tabValue(tab)
   const c = countText(text || '')
-  $('#st-count').textContent = c.words ? fmt(c.words) + ' 字 · ' + fmt(c.chars) + ' 字符' : ''
+  let count = c.words ? fmt(c.words) + ' 字 · ' + fmt(c.chars) + ' 字符' : ''
+  if (tab) {
+    const label = ENC_LABELS[tab.encoding || 'utf-8'] || 'UTF-8'
+    count = count ? count + ' · ' + label : label
+  }
+  $('#st-count').textContent = count
   $('#st-path').textContent = tab ? tab.path || tab.name + '（未保存）' : ''
 }
 
@@ -662,13 +713,23 @@ function replaceAll() {
   const q = $('#find-input').value
   const rep = $('#replace-input').value
   if (!q) return
-  let n = 0
-  while (n < 500) {
-    if (!rawFind(q)) break
-    document.execCommand('insertText', false, rep)
-    n++
-    if (rep.indexOf(q) >= 0 && n >= 20) break
+  const tab = activeTab()
+  if (!tab || !tab.vditor || !tab.ready) {
+    toast('没有打开的文档')
+    return
   }
+  // 在源文本上整体替换：DOM 逐处 insertText 在「替换串包含查找串」时会自匹配循环
+  // （实测 10 处替换撞 20 处上限后文档被破坏），且每处一条撤销记录。源替换一次成型、
+  // 计数精确，并作为单条撤销记录可整体撤销
+  const parts = tabValue(tab).split(q)
+  const n = parts.length - 1
+  if (!n) {
+    toast('未找到匹配内容')
+    return
+  }
+  tab.vditor.setValue(parts.join(rep))
+  updateStatus()
+  renderOutlinePanel()
   toast('已替换 ' + n + ' 处')
 }
 
@@ -775,7 +836,110 @@ function clampSelectionToBlock() {
   sel.removeAllRanges()
   sel.addRange(clamped)
 }
+
+// 双击选词会带上尾随空格（浏览器词选择的标准行为）；`**词 **` 因闭合标记前是空白
+// 违反 CommonMark 分隔符配对规则，Lute 拒绝解析——字面 ** 永不渲染（实测：行中词双击
+// 加粗不渲染、行尾词正常）。行内格式化前把选区边缘空白裁到标记外。
+// 返回 false 表示选区全是空白，格式化无意义应跳过。
+function trimSelectionEdges() {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount || sel.isCollapsed) return true
+  const range = sel.getRangeAt(0)
+  const text = range.toString()
+  if (!text) return true
+  const lead = text.length - text.replace(/^\s+/, '').length
+  const trail = text.length - text.replace(/\s+$/, '').length
+  if (!lead && !trail) return true
+  if (lead + trail >= text.length) return false
+  try {
+    const sc = range.startContainer
+    const ec = range.endContainer
+    if (lead && sc.nodeType === 3 && range.startOffset + lead <= sc.data.length) {
+      range.setStart(sc, range.startOffset + lead)
+    }
+    if (trail && ec.nodeType === 3 && range.endOffset - trail >= 0) {
+      range.setEnd(ec, range.endOffset - trail)
+    }
+    sel.removeAllRanges()
+    sel.addRange(range)
+  } catch {}
+  return true
+}
 const INLINE_NODE_TYPES = { bold: 'strong', italic: 'em', strike: 's', 'inline-code': 'code', link: 'a' }
+
+// 行内格式的纯文本标记对（添加分支用 execCommand 插入，避开 Vditor 的 <wbr> 路径）
+const INLINE_MARKER_PAIRS = { bold: ['**', '**'], italic: ['*', '*'], strike: ['~~', '~~'], 'inline-code': ['`', '`'] }
+
+// 选区是否已在同类行内格式节点内（是→按 Ctrl+B 应走移除分支）
+function selectionInsideFormat(name) {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return false
+  let node = sel.getRangeAt(0).startContainer
+  if (node.nodeType === 3) node = node.parentNode
+  const type = INLINE_NODE_TYPES[name]
+  return !!(type && node.closest && node.closest('.vditor-ir__node[data-type="' + type + '"]'))
+}
+
+// 选区前一个字符（无法确定时返回 null，调用方保守处理）
+function charBeforeSelection() {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return null
+  const r = sel.getRangeAt(0)
+  if (r.startContainer.nodeType === 3) {
+    if (r.startOffset > 0) return r.startContainer.data[r.startOffset - 1]
+    let sib = r.startContainer.previousSibling
+    while (sib) {
+      if (sib.nodeType === 3 && sib.data.length) return sib.data[sib.data.length - 1]
+      if (sib.nodeType === 1) {
+        const t = sib.textContent
+        if (t) return t[t.length - 1]
+      }
+      sib = sib.previousSibling
+    }
+  }
+  return null
+}
+
+// 选区后一个字符（无法确定时返回 null）
+function charAfterSelection() {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return null
+  const r = sel.getRangeAt(0)
+  if (r.endContainer.nodeType === 3) {
+    if (r.endOffset < r.endContainer.data.length) return r.endContainer.data[r.endOffset]
+    let sib = r.endContainer.nextSibling
+    while (sib) {
+      if (sib.nodeType === 3 && sib.data.length) return sib.data[0]
+      if (sib.nodeType === 1) {
+        const t = sib.textContent
+        if (t) return t[0]
+      }
+      sib = sib.nextSibling
+    }
+  }
+  return null
+}
+
+// CommonMark 分隔符侧性规则：开标记 ** 紧跟标点且前一字符是文字→无法开启（字**，文字** 不渲染）；
+// 闭标记 ** 前是标点且后一字符是文字→无法闭合（**文字，**字 不渲染）。块首／前是空格或
+// 标点／后是行尾时不受影响。会破坏配对的边缘标点移到标记外（标点不参与加粗），保证即时渲染
+function splitPunctEdges(text, prev, next) {
+  let lead = ''
+  let trail = ''
+  let body = text
+  const breaksFlank = (c) => !!c && /\S/u.test(c) && !/\p{P}/u.test(c)
+  if (body && /^\p{P}/u.test(body) && breaksFlank(prev)) {
+    const m = /^\p{P}+/u.exec(body)
+    lead = m[0]
+    body = body.slice(lead.length)
+  }
+  if (body && /\p{P}$/u.test(body) && breaksFlank(next)) {
+    const m = /\p{P}+$/u.exec(body)
+    trail = m[0]
+    body = body.slice(0, body.length - trail.length)
+  }
+  return { lead, trail, body }
+}
 
 function isWordChar(ch) {
   const code = ch.charCodeAt(0)
@@ -901,6 +1065,7 @@ function doAction(name) {
       if (!expandCollapsedSelectionToWord()) return
     } else {
       clampSelectionToBlock()
+      if (!trimSelectionEdges()) return
     }
     syncInlineToolbarState(tab, name)
   }
@@ -909,8 +1074,42 @@ function doAction(name) {
     case 'bold':
     case 'italic':
     case 'strike':
+    case 'inline-code': {
+      // Vditor 工具栏 ADD 路径插入 **<wbr>词<wbr>**（带光标标记元素）——Lute 对
+      // 「标记紧邻 CJK 字符＋内部含 <wbr>」的组合配对失败（实测：中文词**<wbr>甲<wbr>**
+      // 不解析、中文词**甲** 正常、英文空格邻接＋wbr 正常），导致中文文本加粗后不渲染，
+      // 直到下次输入触发整块重解析才出现。添加分支改用 execCommand 插入纯文本标记
+      // （自然触发 input 事件→input() 重解析，无 wbr，必可配对）；移除分支（光标已在
+      // 同类格式内）保留工具栏路径（removeInline 自带重解析）
+      const selC = window.getSelection()
+      let textC = selC && selC.rangeCount ? String(selC) : ''
+      if (selectionInsideFormat(name)) {
+        if (triggerToolbar(name) && INLINE_COLLAPSE_ACTIONS.indexOf(name) >= 0) collapseFormattedNodeAtCursor(name)
+        break
+      }
+      // 边缘标点调整（行内代码无侧性规则，不需要）：会破坏开/闭标记配对的标点移到标记外
+      let punctLead = ''
+      let punctTrail = ''
+      if (textC && name !== 'inline-code') {
+        const adj = splitPunctEdges(textC, charBeforeSelection(), charAfterSelection())
+        punctLead = adj.lead
+        punctTrail = adj.trail
+        textC = adj.body
+      }
+      if (textC && (name === 'bold' || name === 'italic') && inlineMarkerConflict(name)) {
+        const u = name === 'bold' ? '__' : '_'
+        insertAtCursor(punctLead + u + textC + u + punctTrail)
+        collapseFormattedNodeAtCursor(name)
+        break
+      }
+      if (textC) {
+        const pair = INLINE_MARKER_PAIRS[name]
+        insertAtCursor(punctLead + pair[0] + textC + pair[1] + punctTrail)
+        collapseFormattedNodeAtCursor(name)
+      }
+      break
+    }
     case 'link':
-    case 'inline-code':
     case 'list':
     case 'ordered-list':
     case 'check':
@@ -919,15 +1118,6 @@ function doAction(name) {
     case 'code':
     case 'indent':
     case 'outdent':
-      if ((name === 'bold' || name === 'italic') && inlineMarkerConflict(name)) {
-        const selC = window.getSelection()
-        const textC = selC && selC.rangeCount ? String(selC) : ''
-        if (textC) {
-          insertAtCursor((name === 'bold' ? '__' : '_') + textC + (name === 'bold' ? '__' : '_'))
-          collapseFormattedNodeAtCursor(name)
-          break
-        }
-      }
       if (triggerToolbar(name) && INLINE_COLLAPSE_ACTIONS.indexOf(name) >= 0) collapseFormattedNodeAtCursor(name)
       break
     case 'table': {
@@ -1235,9 +1425,16 @@ async function renderMarkdownHtml(md) {
   return tab && tab.vditor ? tab.vditor.getHTML() : ''
 }
 
-function buildStandaloneHtml(title, body, css) {
+function buildStandaloneHtml(title, body, css, opts) {
+  opts = opts || {}
+  // 导出产物是纯静态内容：禁脚本／插件，防止 markdown 内嵌 HTML 在产物里执行
+  const csp = '<meta http-equiv="Content-Security-Policy" content="script-src \'none\'; object-src \'none\'">\n'
+  const baseTag = opts.baseHref ? '<base href="' + escapeHtml(opts.baseHref) + '">\n' : ''
   return (
-    '<!doctype html>\n<html lang="zh-CN">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<title>' +
+    '<!doctype html>\n<html lang="zh-CN">\n<head>\n<meta charset="utf-8">\n' +
+    baseTag +
+    csp +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">\n<title>' +
     escapeHtml(title) +
     '</title>\n<style>\n' +
     css +
@@ -1247,6 +1444,45 @@ function buildStandaloneHtml(title, body, css) {
   )
 }
 
+function fileUrlToPath(u) {
+  try {
+    const url = new URL(u)
+    if (url.protocol !== 'file:') return null
+    let p = decodeURIComponent(url.pathname)
+    if (url.host) p = '\\\\' + url.host + p
+    else if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1)
+    return p.replace(/\//g, '\\')
+  } catch {
+    return null
+  }
+}
+
+// HTML 导出内嵌本地图片为 data URI，兑现「自包含单文件」；远程图片保留原 URL
+async function inlineLocalImages(html, dir) {
+  if (!html || !dir) return html
+  const base = dirToBaseUrl(dir)
+  if (!base) return html
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    const imgs = Array.from(doc.querySelectorAll('img[src]'))
+    let changed = false
+    for (const img of imgs) {
+      const src = img.getAttribute('src') || ''
+      if (!src || /^(https?:|data:|blob:|file:)/i.test(src)) continue
+      const p = fileUrlToPath(new URL(src, base).href)
+      if (!p) continue
+      const r = await api.readImage(p)
+      if (r.ok && r.base64) {
+        img.setAttribute('src', 'data:' + r.mime + ';base64,' + r.base64)
+        changed = true
+      }
+    }
+    return changed ? doc.body.innerHTML : html
+  } catch {
+    return html
+  }
+}
+
 async function exportHtml() {
   const tab = activeTab()
   if (!tab || !tab.vditor || !tab.ready) {
@@ -1254,9 +1490,10 @@ async function exportHtml() {
     return
   }
   const md = tabValue(tab)
-  const bodyHtml = await renderMarkdownHtml(md)
+  let bodyHtml = await renderMarkdownHtml(md)
   const css = await collectExportCss()
   const title = stripExt(tab.name) || '未命名'
+  bodyHtml = await inlineLocalImages(bodyHtml, tab.path ? pathDirname(tab.path) : '')
   const r = await api.exportHtml(title + '.html', buildStandaloneHtml(title, bodyHtml, css))
   if (r.ok) toast('已导出 HTML：' + r.path)
 }
@@ -1271,7 +1508,9 @@ async function exportPdf() {
   const bodyHtml = await renderMarkdownHtml(md)
   const css = await collectExportCss()
   const title = stripExt(tab.name) || '未命名'
-  const r = await api.exportPdf(title, buildStandaloneHtml(title, bodyHtml, css))
+  // PDF 经 %TEMP% 中的临时页打印，相对图片必须靠 base 指回文档目录才能加载
+  const baseHref = tab.path ? dirToBaseUrl(pathDirname(tab.path)) : ''
+  const r = await api.exportPdf(title, buildStandaloneHtml(title, bodyHtml, css, { baseHref }))
   if (r.ok) toast('已导出 PDF：' + r.path)
 }
 
@@ -1361,10 +1600,18 @@ async function handleMenu(cmd, arg) {
 }
 
 function globalKeydown(e) {
-  if (e.key === 'Escape' && !$('#findbar').hidden) {
-    closeFind()
-    e.preventDefault()
-    return
+  if (e.key === 'Escape') {
+    const mask = document.querySelector('.modal-mask')
+    if (mask) {
+      mask.remove()
+      e.preventDefault()
+      return
+    }
+    if (!$('#findbar').hidden) {
+      closeFind()
+      e.preventDefault()
+      return
+    }
   }
   if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyW') {
     e.preventDefault()
@@ -1376,6 +1623,32 @@ function globalKeydown(e) {
     e.stopPropagation()
     cycleTab(e.shiftKey ? -1 : 1)
   }
+}
+
+// ---------- 快捷键冲突拦截 ----------
+// Vditor hotkeyEvent 对其工具栏快捷键（⌘B/⌘I/⌘K/⌘D/⌘G/⌘O/⇧⌘I）命中后自行处理并
+// preventDefault——按键被标记已处理，Electron 菜单加速键（未处理路径）被整体抑制，
+// 应用侧的修复路径（选区边缘空白裁剪等）被绕过；带空白的选区（双击选词的尾随空格）
+// 产生无法配对的字面 ** 标记，永不渲染——即「快捷键加粗后不渲染」的根因。
+// 窗口捕获阶段先于 Vditor 的元素级监听器拦截这些组合：stopPropagation 跳过 Vditor，
+// preventDefault 抑制菜单加速键避免双触发，动作统一转交 handleMenu/doAction 修复路径。
+const HOTKEY_ACTIONS = [
+  { code: 'KeyB', ctrl: true, shift: false, cmd: 'act', arg: 'bold' },
+  { code: 'KeyI', ctrl: true, shift: false, cmd: 'act', arg: 'italic' },
+  { code: 'KeyK', ctrl: true, shift: false, cmd: 'act', arg: 'link' },
+  { code: 'KeyD', ctrl: true, shift: false, cmd: 'act', arg: 'strike' },
+  { code: 'KeyG', ctrl: true, shift: false, cmd: 'act', arg: 'inline-code' },
+  { code: 'KeyO', ctrl: true, shift: false, cmd: 'open' },
+  { code: 'KeyI', ctrl: true, shift: true, cmd: 'act', arg: 'image' },
+]
+
+function hotkeyIntercept(e) {
+  if (e.isComposing || e.altKey || e.metaKey || !e.ctrlKey) return
+  const hit = HOTKEY_ACTIONS.find((h) => e.code === h.code && e.shiftKey === h.shift)
+  if (!hit) return
+  e.preventDefault()
+  e.stopPropagation()
+  handleMenu(hit.cmd, hit.arg)
 }
 
 function bindStaticEvents() {
@@ -1424,6 +1697,7 @@ function bindStaticEvents() {
   })
 
   window.addEventListener('keydown', globalKeydown, true)
+  window.addEventListener('keydown', hotkeyIntercept, true)
   document.addEventListener('selectionchange', updateFocusMark)
   // Typora 式链接点击：普通点击展开为编辑，Ctrl+点击才访问
   // 捕获阶段先于 Vditor 冒泡处理器运行——普通点击预先加 --expand 使其跳过
@@ -1448,10 +1722,20 @@ function bindStaticEvents() {
   document.addEventListener('dragover', (e) => e.preventDefault())
   document.addEventListener('drop', (e) => {
     e.preventDefault()
-    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]
-    if (!f) return
-    const p = api.pathForFile(f)
-    if (p && /\.(md|markdown|txt)$/i.test(p)) openPath(p)
+    const files = e.dataTransfer && e.dataTransfer.files ? Array.from(e.dataTransfer.files) : []
+    const paths = []
+    for (const f of files) {
+      const p = api.pathForFile(f)
+      if (p && /\.(md|markdown|txt)$/i.test(p)) paths.push(p)
+    }
+    if (!paths.length) return
+    if (paths.length === 1) {
+      openPath(paths[0])
+    } else {
+      ;(async () => {
+        for (const p of paths) await openPath(p)
+      })()
+    }
   })
 
   api.onMenuEvent((cmd, arg) => handleMenu(cmd, arg))
@@ -1532,38 +1816,56 @@ init()
 
 // ---------- 关闭前落盘与测试钩子 ----------
 
-window.__im = {
-  openPath,
-  newDoc,
-  activateTab,
-  closeTab,
-  applyHeading,
-  doAction,
-  replaceAll,
-  setDark,
-  setFocus,
-  setTypewriter,
-  setOutline,
-  setSidebar,
-  setCodeWrap,
-  exportHtml,
-  exportPdf,
-  setWorkspace: (p) => {
-    state.workspace = p
-    state.expanded = new Set([p])
-    return refreshTree()
-  },
-  buildExport: async () => {
-    const tab = activeTab()
-    if (!tab || !tab.vditor || !tab.ready) return null
-    const md = tabValue(tab)
-    const bodyHtml = await renderMarkdownHtml(md)
-    const css = await collectExportCss()
-    return buildStandaloneHtml(stripExt(tab.name) || '未命名', bodyHtml, css)
-  },
-  tabs: () => state.tabs.map((t) => ({ id: t.id, name: t.name, path: t.path, dirty: t.dirty })),
-  active: () => {
-    const t = activeTab()
-    return t ? t.name : null
-  },
+// 与主进程 --eval 门控同源：仅开发模式（或打包后 IM_DEV_TOOLS=1）暴露
+if (api.devHooks) {
+  window.__im = {
+    openPath,
+    newDoc,
+    activateTab,
+    closeTab,
+    applyHeading,
+    doAction,
+    replaceAll,
+    setDark,
+    setFocus,
+    setTypewriter,
+    setOutline,
+    setSidebar,
+    setCodeWrap,
+    exportHtml,
+    exportPdf,
+    setWorkspace: (p) => {
+      state.workspace = p
+      state.expanded = new Set([p])
+      return refreshTree()
+    },
+    buildExport: async () => {
+      const tab = activeTab()
+      if (!tab || !tab.vditor || !tab.ready) return null
+      const md = tabValue(tab)
+      let bodyHtml = await renderMarkdownHtml(md)
+      const css = await collectExportCss()
+      bodyHtml = await inlineLocalImages(bodyHtml, tab.path ? pathDirname(tab.path) : '')
+      return buildStandaloneHtml(stripExt(tab.name) || '未命名', bodyHtml, css)
+    },
+    buildPdf: async () => {
+      const tab = activeTab()
+      if (!tab || !tab.vditor || !tab.ready) return null
+      const md = tabValue(tab)
+      const bodyHtml = await renderMarkdownHtml(md)
+      const css = await collectExportCss()
+      const baseHref = tab.path ? dirToBaseUrl(pathDirname(tab.path)) : ''
+      return buildStandaloneHtml(stripExt(tab.name) || '未命名', bodyHtml, css, { baseHref })
+    },
+    value: () => tabValue(activeTab()),
+    encoding: () => {
+      const t = activeTab()
+      return t ? t.encoding || 'utf-8' : null
+    },
+    tabs: () => state.tabs.map((t) => ({ id: t.id, name: t.name, path: t.path, dirty: t.dirty, encoding: t.encoding || 'utf-8' })),
+    active: () => {
+      const t = activeTab()
+      return t ? t.name : null
+    },
+  }
 }
